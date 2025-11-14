@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>MediaPipe Hands + micro:bit</title>
+  <title>MediaPipe Hands + micro:bit (优化版)</title>
   <style>
     body { font-family: sans-serif; text-align: center; margin: 10px; }
     video, canvas { width: 100%; max-width: 400px; margin: 5px 0; }
@@ -40,20 +40,30 @@
     const UART_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
     const TX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
 
-    // 连接 micro:bit
     async function connectMicrobit() {
+      if (!navigator.bluetooth) {
+        alert("Web Bluetooth 不支持，请使用 Chrome 或 Edge，并确保是 HTTPS 页面！");
+        statusEl.textContent = "浏览器不支持 Web Bluetooth";
+        return;
+      }
+
       try {
         statusEl.textContent = "扫描 micro:bit...";
         const device = await navigator.bluetooth.requestDevice({
           filters: [{ services: [UART_SERVICE_UUID] }]
         });
+
         const server = await device.gatt.connect();
         const service = await server.getPrimaryService(UART_SERVICE_UUID);
         txCharacteristic = await service.getCharacteristic(TX_CHAR_UUID);
+
         statusEl.textContent = "micro:bit 已连接";
+        connectBtn.disabled = true;
+        connectBtn.textContent = "已连接";
       } catch (err) {
-        statusEl.textContent = "连接失败：" + err;
+        statusEl.textContent = "连接失败，请检查蓝牙或权限：" + err;
         console.error(err);
+        alert("连接失败，请确保蓝牙已开启并允许网页访问设备。");
       }
     }
 
@@ -62,7 +72,11 @@
     async function sendToMicrobit(message) {
       if (!txCharacteristic) return;
       const encoder = new TextEncoder();
-      await txCharacteristic.writeValue(encoder.encode(message + "\n"));
+      try {
+        await txCharacteristic.writeValue(encoder.encode(message + "\n"));
+      } catch (err) {
+        console.error("发送失败", err);
+      }
     }
 
     async function init() {
@@ -138,7 +152,6 @@
         lastY = wrist.y;
         actionEl.textContent = action;
 
-        // 发送给 micro:bit
         await sendToMicrobit(action);
       } else {
         actionEl.textContent = "没有检测到手";
@@ -147,7 +160,6 @@
       requestAnimationFrame(loop);
     }
 
-    // 页面加载后初始化
     window.addEventListener("load", init);
   </script>
 </body>
