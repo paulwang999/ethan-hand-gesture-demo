@@ -85,9 +85,14 @@
     async function init() {
       statusEl.textContent = "正在加载模型...";
       try {
-        const vision = await FilesetResolver.forVisionTasks("./wasm");
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+        );
+
         handLandmarker = await HandLandmarker.createFromOptions(vision, {
-          baseOptions: { modelAssetPath: "./hand_landmarker.task" },
+          baseOptions: {
+            modelAssetPath: "https://raw.githubusercontent.com/paulwang999/ethan-hand-gesture-demo/main/hand_landmarker.task"
+          },
           runningMode: "VIDEO",
           numHands: 1
         });
@@ -96,7 +101,7 @@
         startCamera();
       } catch (err) {
         console.error(err);
-        statusEl.textContent = "模型加载失败，请检查文件路径或刷新页面。";
+        statusEl.textContent = "模型加载失败，请检查路径或刷新页面。";
       }
     }
 
