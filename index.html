@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>MediaPipe Hands + micro:bit（食指控制 左右上下）</title>
+<title>MediaPipe Hands + micro:bit（食指控制 左右上下 + 拳头中立）</title>
 <style>
   body { text-align: center; font-family: sans-serif; margin: 10px; }
   video, canvas { width: 45%; margin: 5px; border: 1px solid #333; vertical-align: top; }
@@ -14,7 +14,7 @@
 
 <body>
 
-<h2>MediaPipe Hands → micro:bit（食指控制 左/右/上/下）</h2>
+<h2>MediaPipe Hands → micro:bit（食指控制 左/右/上/下，握拳＝不动）</h2>
 
 <div id="status">初始化...</div>
 <div id="action">等待动作...</div>
@@ -28,7 +28,7 @@
 <!-- 灵敏度设置（可调） -->
 <div class="slider-container">
     <label>手指方向强度阈值 (dirThreshold): <span id="moveVal">0.05</span></label><br>
-    <input type="range" id="moveSlider" min="0.02" max="0.15" step="0.01" value="0.05">
+    <input type="range" id="moveSlider" min="0.02" max="0.20" step="0.01" value="0.05">
 </div>
 <div class="slider-container">
     <label>连续帧数 (framesNeeded): <span id="frameVal">2</span></label><br>
@@ -39,25 +39,23 @@
     <input type="range" id="coolSlider" min="50" max="500" step="10" value="150">
 </div>
 
-<!-- ======================= -->
-<!-- ⚠️ 脚本一定放在 canvas 后面 -->
-<!-- ======================= -->
+<!-- 脚本一定放在 DOM 元素后面 -->
 <script type="module">
 import { HandLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
 
-const statusEl  = document.getElementById("status");
-const actionEl  = document.getElementById("action");
-const video     = document.getElementById("video");
-const canvas    = document.getElementById("canvas");
-const ctx       = canvas.getContext("2d");
+const statusEl   = document.getElementById("status");
+const actionEl   = document.getElementById("action");
+const video      = document.getElementById("video");
+const canvas     = document.getElementById("canvas");
+const ctx        = canvas.getContext("2d");
 const connectBtn = document.getElementById("connectBtn");
 
 // USB serial
 let port;
 let writer;
 
-// 参数
-let dirThreshold = parseFloat(document.getElementById("moveSlider").value);
+// 参数：从滑块读取初始值
+let dirThreshold = parseFloat(document.getElementById("moveSlider").value); // 手指向量长度最小值
 let framesNeeded = parseInt(document.getElementById("frameSlider").value);
 let cooldown     = parseInt(document.getElementById("coolSlider").value);
 
@@ -75,9 +73,18 @@ document.getElementById("coolSlider").addEventListener("input", e=>{
     document.getElementById("coolVal").textContent = cooldown;
 });
 
+// 初始化显示
+document.getElementById("moveVal").textContent  = dirThreshold.toFixed(2);
+document.getElementById("frameVal").textContent = framesNeeded;
+document.getElementById("coolVal").textContent  = cooldown;
+
 // 连接 micro:bit（USB）
 connectBtn.addEventListener("click", async () => {
     try {
+        if (!("serial" in navigator)) {
+            statusEl.textContent = "当前浏览器不支持 Web Serial，请使用桌面版 Chrome";
+            return;
+        }
         port = await navigator.serial.requestPort();
         await port.open({ baudRate: 115200 });
         writer = port.writable.getWriter();
@@ -94,12 +101,12 @@ let currentAction = null;
 let actionCounter = 0;
 let lastSent = 0;
 
-// 英文 → 中文显示
+// 英文动作 → 中文显示
 function toChinese(a) {
-    return a==="LEFT" ? "左" :
-           a==="RIGHT"? "右" :
-           a==="UP"   ? "上" :
-           a==="DOWN" ? "下" :
+    return a==="LEFT"  ? "左" :
+           a==="RIGHT" ? "右" :
+           a==="UP"    ? "上" :
+           a==="DOWN"  ? "下" :
            "等待动作...";
 }
 
@@ -113,7 +120,7 @@ async function sendAction(a) {
     if (a==="UP")    msg="U";
     if (a==="DOWN")  msg="D";
 
-    await writer.write(new TextEncoder().encode(msg+"\n"));
+    await writer.write(new TextEncoder().encode(msg + "\n"));
 }
 
 // MediaPipe 初始化
@@ -163,57 +170,58 @@ async function loop(timestamp) {
     ctx.drawImage(video,0,0,canvas.width,canvas.height);
 
     if (results.landmarks && results.landmarks.length > 0) {
-       const lm = results.landmarks[0];
-const draw = new DrawingUtils(ctx);
-draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS);
-draw.drawLandmarks(lm);
+        const lm   = results.landmarks[0];
+        const draw = new DrawingUtils(ctx);
+        draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS);
+        draw.drawLandmarks(lm);
 
-const wrist = lm[0];
-const tip   = lm[8];
+        const wrist = lm[0];   // 手腕
+        const tip   = lm[8];   // 食指指尖
 
-// 手指方向向量
-const vx = tip.x - wrist.x;   // >0 右 <0 左
-const vy = tip.y - wrist.y;   // >0 下 <0 上
-const len = Math.hypot(vx, vy);
+        // 手指方向向量
+        const vx = tip.x - wrist.x;   // >0 右 <0 左
+        const vy = tip.y - wrist.y;   // >0 下 <0 上
+        const len = Math.hypot(vx, vy);
 
-let detected = null;
+        // ------- 检测“拳头” -------
+        function dist(a, b) {
+            return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+        }
 
-// -------- 新增：识别“拳头” --------
-function dist(a, b) {
-    return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
-}
+        const dIndex  = dist(lm[8],  wrist);  // 食指尖
+        const dMiddle = dist(lm[12], wrist);  // 中指尖
+        const dRing   = dist(lm[16], wrist);  // 无名指尖
+        const dPinky  = dist(lm[20], wrist);  // 小指尖
 
-// 四个手指尖到手腕的距离
-const dIndex  = dist(lm[8],  wrist);
-const dMiddle = dist(lm[12], wrist);
-const dRing   = dist(lm[16], wrist);
-const dPinky  = dist(lm[20], wrist);
+        const fistThreshold = 0.12;  // 越小要求拳头越紧，越大越容易判定为拳头
 
-// 距离阈值，可以之后再微调，值越小要求“拳头”越紧
-const fistThreshold = 0.12;
+        const isFist =
+            dIndex  < fistThreshold &&
+            dMiddle < fistThreshold &&
+            dRing   < fistThreshold &&
+            dPinky  < fistThreshold;
 
-// 当四个指尖都离手腕很近，就认为是拳头
-const isFist =
-    dIndex  < fistThreshold &&
-    dMiddle < fistThreshold &&
-    dRing   < fistThreshold &&
-    dPinky  < fistThreshold;
+        let detected = null;
 
-// 如果是拳头，就不输出方向（保持等待状态）
-if (!isFist && len > dirThreshold) {
-    // 只有在不是拳头 & 手指方向足够明显时才判断方向
-    if (Math.abs(vx) > Math.abs(vy)) {
-        detected = vx > 0 ? "RIGHT" : "LEFT";
-    } else {
-        detected = vy > 0 ? "DOWN" : "UP";
-    }
-}
- 
- 
+        // 不是拳头 & 手指方向明显，才判断方向
+        if (!isFist && len > dirThreshold) {
+            if (Math.abs(vx) > Math.abs(vy)) {
+                detected = vx > 0 ? "RIGHT" : "LEFT";
+            } else {
+                detected = vy > 0 ? "DOWN" : "UP";
+            }
+        }
 
-        if (detected === currentAction) actionCounter++;
-        else if (detected) { currentAction = detected; actionCounter = 1; }
-        else { currentAction = null; actionCounter = 0; }
+        // 去抖：连续多帧同一动作
+        if (detected && detected === currentAction) {
+            actionCounter++;
+        } else if (detected) {
+            currentAction = detected;
+            actionCounter = 1;
+        } else {
+            currentAction = null;
+            actionCounter = 0;
+        }
 
         const now = performance.now();
 
