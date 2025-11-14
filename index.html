@@ -1,12 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>MediaPipe Hands + micro:bit</title>
+<style>
+body { font-family: sans-serif; text-align: center; margin: 10px; }
+video, canvas { width: 100%; max-width: 400px; margin: 5px 0; }
+button { font-size: 18px; padding: 5px 10px; margin: 10px; }
+</style>
+</head>
+<body>
+<h2>MediaPipe Hands → micro:bit</h2>
+<button id="connectBtn">连接 micro:bit</button>
+<div id="status">状态: 等待连接</div>
 <video id="video" autoplay playsinline></video>
 <canvas id="canvas"></canvas>
 
 <script type="module">
-import { HandLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+import { HandLandmarker, FilesetResolver, DrawingUtils } 
+    from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+const statusEl = document.getElementById("status");
+const connectBtn = document.getElementById("connectBtn");
 
 let handLandmarker;
 let lastX = null, lastY = null;
@@ -14,19 +32,26 @@ let lastX = null, lastY = null;
 // USB micro:bit
 let port, writer;
 
-async function connectMicrobit() {
-    port = await navigator.serial.requestPort();
-    await port.open({ baudRate: 115200 });
-    writer = port.writable.getWriter();
-}
-await connectMicrobit();
+connectBtn.addEventListener("click", async () => {
+    try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        writer = port.writable.getWriter();
+        statusEl.textContent = "状态: micro:bit 已连接";
+    } catch(e) {
+        statusEl.textContent = "连接失败: " + e;
+        console.error(e);
+    }
+});
 
 async function sendAction(action){
     if(!writer) return;
+    console.log("发送动作:", action);
     await writer.write(new TextEncoder().encode(action + "\n"));
 }
 
 async function init(){
+    statusEl.textContent = "加载模型...";
     const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
     );
@@ -35,12 +60,14 @@ async function init(){
         runningMode: "VIDEO",
         numHands: 1,
     });
+    statusEl.textContent = "启动摄像头...";
     const stream = await navigator.mediaDevices.getUserMedia({video:true});
     video.srcObject = stream;
     video.onloadedmetadata = ()=>{video.play(); requestAnimationFrame(loop);}
 }
 
 async function loop(timestamp){
+    if(!handLandmarker) return;
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
 
@@ -48,26 +75,26 @@ async function loop(timestamp){
     ctx.drawImage(video,0,0,canvas.width,canvas.height);
 
     if(results.landmarks?.length){
-        const drawingUtils=new DrawingUtils(ctx);
+        const drawingUtils = new DrawingUtils(ctx);
         for(const lm of results.landmarks){
-            drawingUtils.drawConnectors(lm,HandLandmarker.HAND_CONNECTIONS);
+            drawingUtils.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS);
             drawingUtils.drawLandmarks(lm);
         }
 
         const wrist = results.landmarks[0][0];
-        if(lastX!==null){
+        let action = "";
+        if(lastX !== null){
             const dx = wrist.x - lastX;
             const dy = wrist.y - lastY;
-            let action = "";
-            if(Math.abs(dx)>Math.abs(dy)){
-                action = dx>0?"RIGHT":"LEFT";
+            if(Math.abs(dx) > Math.abs(dy)){
+                action = dx > 0 ? "RIGHT" : "LEFT";
             }else{
-                action = dy>0?"DOWN":"UP";
+                action = dy > 0 ? "DOWN" : "UP";
             }
-            await sendAction(action);
         }
-        lastX = wrist.x;
-        lastY = wrist.y;
+        lastX = wrist.x; lastY = wrist.y;
+
+        await sendAction(action);
     }
 
     requestAnimationFrame(loop);
@@ -75,3 +102,5 @@ async function loop(timestamp){
 
 window.addEventListener("load", init);
 </script>
+</body>
+</html>
