@@ -2,79 +2,111 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Hand Gesture → micro:bit</title>
+  <title>Hand Gesture + micro:bit BLE</title>
   <style>
-    video, canvas { width: 100%; max-width: 400px; }
-    button { margin: 5px; padding: 10px; }
+    video, canvas {
+      width: 100%;
+      max-width: 400px;
+    }
+    #connectBtn {
+      padding: 10px 20px;
+      font-size: 18px;
+      margin: 10px 0;
+      background: #4CAF50;
+      color: white;
+      border-radius: 8px;
+      border: none;
+    }
   </style>
 </head>
+
 <body>
-  <h2>MediaPipe Hands + micro:bit 舵机控制</h2>
+  <h2>Hand Gesture to micro:bit</h2>
+
+  <button id="connectBtn">🔵 连接到 micro:bit</button>
 
   <video id="video" autoplay playsinline></video>
   <canvas id="canvas"></canvas>
 
-  <p>
-    <button id="connectBtn">扫描并连接 micro:bit</button>
-    <button id="retryBtn" style="display:none;">重新扫描</button>
-  </p>
-  <p id="status">状态：等待操作...</p>
-
   <script type="module">
-    import { HandLandmarker, FilesetResolver, DrawingUtils } from 
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+    import {
+      HandLandmarker,
+      FilesetResolver,
+      DrawingUtils
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
 
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
-    const status = document.getElementById("status");
-    const connectBtn = document.getElementById("connectBtn");
-    const retryBtn = document.getElementById("retryBtn");
+    // ----------------------
+    // 🔵 BLE 相关变量
+    // ----------------------
+    let microbitDevice = null;
+    let ledService = null;    // 用 micro:bit 的 LED Service 写数据
 
-    let handLandmarker;
-    let microbitDevice, microbitServer, uartService, txCharacteristic;
-
-    // --- 蓝牙相关 ---
-    async function scanMicrobit() {
-      status.textContent = "状态：请求扫描 micro:bit...";
+    document.getElementById("connectBtn").onclick = async () => {
       try {
         microbitDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ services: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e'] }]
+          filters: [{ namePrefix: "BBC micro:bit" }],
+          optionalServices: ["e95dd91d-251d-470a-a062-fa1922dfa9a8"] // LED service
         });
-        status.textContent = `状态：找到设备 ${microbitDevice.name}，正在连接...`;
-        microbitServer = await microbitDevice.gatt.connect();
-        uartService = await microbitServer.getPrimaryService('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
-        txCharacteristic = await uartService.getCharacteristic('6e400002-b5a3-f393-e0a9-e50e24dcca9e'); // TX
-        status.textContent = `状态：已连接 ${microbitDevice.name}!`;
-        retryBtn.style.display = "none";
-      } catch(err) {
+
+        const server = await microbitDevice.gatt.connect();
+
+        ledService = await server.getPrimaryService(
+          "e95dd91d-251d-470a-a062-fa1922dfa9a8"
+        );
+
+        alert("成功连接 micro:bit ✔");
+      } 
+      catch (err) {
         console.error(err);
-        status.textContent = `扫描失败或被取消: ${err.message}`;
-        retryBtn.style.display = "inline";
+        alert("连接失败，请重试");
+      }
+    };
+
+    // 写入文本到 micro:bit（0=灭灯，1=亮灯）
+    async function sendGestureToMicrobit(command) {
+      if (!ledService) return;
+
+      try {
+        const char = await ledService.getCharacteristic(
+          "e95d7b77-251d-470a-a062-fa1922dfa9a8"
+        );
+
+        const data = new TextEncoder().encode(command);
+        await char.writeValue(data);
+        console.log("Sent to micro:bit:", command);
+
+      } catch (err) {
+        console.error("Write error:", err);
       }
     }
 
-    connectBtn.addEventListener('click', scanMicrobit);
-    retryBtn.addEventListener('click', scanMicrobit);
+    // ----------------------
+    // 🤖 MediaPipe 初始化
+    // ----------------------
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
 
-    // --- MediaPipe Hands 初始化 ---
-    async function initHandLandmarker() {
+    let handLandmarker;
+
+    async function init() {
       const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+        "./wasm"  // 你的模型文件夹
       );
+
       handLandmarker = await HandLandmarker.createFromOptions(vision, {
         baseOptions: {
-          modelAssetPath:
-            "https://YOUR_OWN_PATH/hand_landmarker.task" // 替换成你上传的模型路径
+          modelAssetPath: "./wasm/hand_landmarker.task"
         },
         runningMode: "VIDEO",
         numHands: 1
       });
+
       startCamera();
     }
 
     function startCamera() {
-      navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+      navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
         video.srcObject = stream;
         video.onloadedmetadata = () => {
           video.play();
@@ -83,51 +115,35 @@
       });
     }
 
-    function sendCommand(cmd) {
-      if (!txCharacteristic) return;
-      const encoder = new TextEncoder();
-      txCharacteristic.writeValue(encoder.encode(cmd + "\n"));
-    }
-
-    let lastGesture = "";
-
     async function loop(timestamp) {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
 
       const results = await handLandmarker.detectForVideo(video, timestamp);
+
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       if (results.landmarks) {
         const drawingUtils = new DrawingUtils(ctx);
-        for (const landmarks of results.landmarks) {
-          drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS);
-          drawingUtils.drawLandmarks(landmarks);
+
+        for (const lm of results.landmarks) {
+          drawingUtils.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS);
+          drawingUtils.drawLandmarks(lm);
         }
 
-        // --- 简单手势识别示例 ---
-        const lm = results.landmarks[0];
-        let gesture = "";
-        const dx = lm[8].x - lm[5].x; // 食指指尖 - 手腕
-        const dy = lm[8].y - lm[5].y;
+        const p0 = results.landmarks[0][0]; // 手腕点
 
-        if (Math.abs(dx) > Math.abs(dy)) {
-          gesture = dx > 0 ? "RIGHT" : "LEFT";
-        } else {
-          gesture = dy > 0 ? "DOWN" : "UP";
-        }
-
-        if (gesture !== lastGesture) {
-          lastGesture = gesture;
-          status.textContent = `手势：${gesture}`;
-          sendCommand(gesture); // 发送给 micro:bit
-        }
+        // 简单判断示例（你可更精确）
+        if (p0.x < 0.3) sendGestureToMicrobit("LEFT");
+        if (p0.x > 0.7) sendGestureToMicrobit("RIGHT");
+        if (p0.y < 0.3) sendGestureToMicrobit("UP");
+        if (p0.y > 0.7) sendGestureToMicrobit("DOWN");
       }
 
       requestAnimationFrame(loop);
     }
 
-    initHandLandmarker();
+    init();
   </script>
 </body>
 </html>
