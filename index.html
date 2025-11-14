@@ -4,13 +4,8 @@
   <meta charset="UTF-8" />
   <title>Hand Gesture + micro:bit BLE</title>
   <style>
-    .video-container {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-    video, canvas {
-      width: 48%;
+    canvas {
+      width: 100%;
       max-width: 400px;
       border: 2px solid #333;
       border-radius: 8px;
@@ -31,10 +26,7 @@
   <h2>Hand Gesture + micro:bit BLE</h2>
   <button id="connectBtn">🔵 连接到 micro:bit</button>
 
-  <div class="video-container">
-    <video id="video" autoplay playsinline></video>
-    <canvas id="canvas"></canvas>
-  </div>
+  <canvas id="canvas"></canvas>
 
   <script type="module">
     import {
@@ -85,12 +77,30 @@
     // ----------------------
     // MediaPipe 手势识别
     // ----------------------
-    const video = document.getElementById("video");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
+
     let handLandmarker;
+    let videoStream;
+    let videoElement;
 
     async function init() {
+      // 摄像头
+      videoElement = document.createElement("video");
+      videoElement.autoplay = true;
+      videoElement.playsInline = true;
+
+      try {
+        videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        videoElement.srcObject = videoStream;
+        await videoElement.play();
+      } catch (err) {
+        console.error("摄像头访问失败:", err);
+        alert("摄像头访问失败，请检查权限");
+        return;
+      }
+
+      // MediaPipe
       const vision = await FilesetResolver.forVisionTasks("./wasm");
       handLandmarker = await HandLandmarker.createFromOptions(vision, {
         baseOptions: { modelAssetPath: "./wasm/hand_landmarker.task" },
@@ -98,28 +108,18 @@
         numHands: 1
       });
 
-      startCamera();
-    }
-
-    function startCamera() {
-      navigator.mediaDevices.getUserMedia({ video: true })
-        .then((stream) => {
-          video.srcObject = stream;
-          video.onloadedmetadata = () => {
-            video.play();
-            requestAnimationFrame(loop);
-          };
-        })
-        .catch(err => console.error("摄像头失败:", err));
+      requestAnimationFrame(loop);
     }
 
     async function loop(timestamp) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      canvas.width = videoElement.videoWidth;
+      canvas.height = videoElement.videoHeight;
 
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      // 绘制摄像头画面
+      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
 
-      const results = await handLandmarker.detectForVideo(video, timestamp);
+      // 手势检测
+      const results = await handLandmarker.detectForVideo(videoElement, timestamp);
 
       if (results.landmarks) {
         const drawingUtils = new DrawingUtils(ctx);
