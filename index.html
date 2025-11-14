@@ -2,21 +2,19 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>MediaPipe Hands + micro:bit LED Service</title>
+  <title>MediaPipe Hands - 手势显示版</title>
   <style>
     body { font-family: sans-serif; text-align: center; margin: 10px; }
     canvas { width: 100%; max-width: 400px; margin: 5px 0; border: 2px solid #333; border-radius: 8px; }
     #status { font-size: 18px; color: blue; margin: 5px; }
     #action { font-size: 24px; font-weight: bold; margin: 5px; color: red; }
-    #connectBtn { font-size: 18px; padding: 5px 10px; margin: 10px; }
   </style>
 </head>
 
 <body>
-  <h2>MediaPipe Hands - Gesture Control micro:bit (LED Service)</h2>
+  <h2>MediaPipe Hands - 手势检测</h2>
   <div id="status">初始化中...</div>
   <div id="action">等待动作...</div>
-  <button id="connectBtn">连接 micro:bit</button>
   <canvas id="canvas"></canvas>
 
   <script type="module">
@@ -26,57 +24,10 @@
     const ctx = canvas.getContext("2d");
     const statusEl = document.getElementById("status");
     const actionEl = document.getElementById("action");
-    const connectBtn = document.getElementById("connectBtn");
 
     let handLandmarker;
     let lastX = null;
     let lastY = null;
-
-    // ---------------- BLE LED Service ----------------
-    const LED_SERVICE_UUID = "e95dd91d-251d-470a-a062-fa1922dfa9a8";
-    const LED_CHAR_UUID = "e95d7b77-251d-470a-a062-fa1922dfa9a8";
-    let ledCharacteristic = null;
-
-    async function connectMicrobit() {
-      if (!navigator.bluetooth) {
-        alert("Web Bluetooth 不支持，请使用 Chrome/Edge 并确保是 HTTPS 页面！");
-        statusEl.textContent = "浏览器不支持 Web Bluetooth";
-        return;
-      }
-      try {
-        statusEl.textContent = "扫描 micro:bit...";
-        const device = await navigator.bluetooth.requestDevice({
-          filters: [{ namePrefix: "BBC micro:bit" }],
-          optionalServices: [LED_SERVICE_UUID]
-        });
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(LED_SERVICE_UUID);
-        ledCharacteristic = await service.getCharacteristic(LED_CHAR_UUID);
-        statusEl.textContent = "micro:bit 已连接 (LED Service)";
-        connectBtn.disabled = true;
-        connectBtn.textContent = "已连接";
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = "连接失败：" + err;
-        alert("连接失败，请确保蓝牙开启并允许网页访问设备。");
-      }
-    }
-
-    connectBtn.addEventListener("click", connectMicrobit);
-
-    async function sendToMicrobit(message) {
-      if (!ledCharacteristic) return;
-      try {
-        const encoder = new TextEncoder();
-        await ledCharacteristic.writeValue(encoder.encode(message + "\n"));
-        console.log("Sent to micro:bit (LED):", message);
-      } catch (err) {
-        console.error("写入失败", err);
-      }
-    }
-
-    // ---------------- MediaPipe Hands ----------------
-    let videoStream;
     let videoElement;
 
     async function init() {
@@ -88,6 +39,7 @@
           runningMode: "VIDEO",
           numHands: 1
         });
+
         statusEl.textContent = "模型加载完成，正在启动摄像头...";
         startCamera();
       } catch (err) {
@@ -118,6 +70,7 @@
 
     async function loop(timestamp) {
       if (!handLandmarker) return;
+
       canvas.width = videoElement.videoWidth;
       canvas.height = videoElement.videoHeight;
       ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
@@ -147,8 +100,6 @@
         lastX = wrist.x;
         lastY = wrist.y;
         actionEl.textContent = action;
-
-        await sendToMicrobit(action);
       } else {
         actionEl.textContent = "没有检测到手";
       }
