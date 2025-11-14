@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>MediaPipe Hand Landmark Demo</title>
+  <style>
+    video, canvas {
+      width: 100%;
+      max-width: 400px;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>MediaPipe Hands - Hand Tracking</h2>
+  <video id="video" autoplay playsinline></video>
+  <canvas id="canvas"></canvas>
+
+  <script type="module">
+    import {
+      HandLandmarker,
+      FilesetResolver,
+      DrawingUtils
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    let lastTimestamp = 0;
+    let handLandmarker;
+
+    async function init() {
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+      );
+
+      handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm/hand_landmarker.task",
+        },
+        runningMode: "VIDEO",
+        numHands: 1,
+      });
+
+      startCamera();
+    }
+
+    function startCamera() {
+      navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+          video.play();
+          requestAnimationFrame(loop);
+        };
+      });
+    }
+
+    async function loop(timestamp) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      const results = await handLandmarker.detectForVideo(video, timestamp);
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      if (results.landmarks) {
+        const drawingUtils = new DrawingUtils(ctx);
+        for (const landmarks of results.landmarks) {
+          drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS);
+          drawingUtils.drawLandmarks(landmarks);
+        }
+
+        // 在这里打印关键点坐标
+        console.log(results.landmarks[0]); 
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    init();
+  </script>
+</body>
+</html>
