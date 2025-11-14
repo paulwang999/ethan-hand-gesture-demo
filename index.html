@@ -42,11 +42,16 @@ const connectBtn = document.getElementById("connectBtn");
 let port = null;
 let writer = null;
 
-// 调参（可以之后做 slider）
-let thresholdXY = 0.03;
-let thresholdY  = 0.03;
-let framesNeeded = 2;
-let cooldown = 150;
+// 调参（更灵敏一点）
+let thresholdXY = 0.015;   // 左右阈值，从 0.03 降到 0.015
+let thresholdY  = 0.015;   // 上下阈值，从 0.03 降到 0.015
+let framesNeeded = 1;      // 连续帧需求从 2 降到 1，动作更容易触发
+let cooldown = 150;        // 冷却时间先保持不变
+
+// 平滑（更少历史帧，更灵敏）
+let history = [];
+const maxHistory = 3;      // 从 5 改成 3，让反应更快
+
 
 // 平滑
 let history = [];
