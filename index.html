@@ -163,27 +163,53 @@ async function loop(timestamp) {
     ctx.drawImage(video,0,0,canvas.width,canvas.height);
 
     if (results.landmarks && results.landmarks.length > 0) {
-        const lm = results.landmarks[0];
-        const draw = new DrawingUtils(ctx);
-        draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS);
-        draw.drawLandmarks(lm);
+       const lm = results.landmarks[0];
+const draw = new DrawingUtils(ctx);
+draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS);
+draw.drawLandmarks(lm);
 
-        const wrist = lm[0];
-        const tip   = lm[8];
+const wrist = lm[0];
+const tip   = lm[8];
 
-        const vx = tip.x - wrist.x;   // >0 右 <0 左
-        const vy = tip.y - wrist.y;   // >0 下 <0 上
+// 手指方向向量
+const vx = tip.x - wrist.x;   // >0 右 <0 左
+const vy = tip.y - wrist.y;   // >0 下 <0 上
+const len = Math.hypot(vx, vy);
 
-        const len = Math.hypot(vx,vy);
-        let detected = null;
+let detected = null;
 
-        if (len > dirThreshold) {
-            if (Math.abs(vx) > Math.abs(vy)) {
-                detected = vx > 0 ? "RIGHT" : "LEFT";
-            } else {
-                detected = vy > 0 ? "DOWN" : "UP";
-            }
-        }
+// -------- 新增：识别“拳头” --------
+function dist(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+// 四个手指尖到手腕的距离
+const dIndex  = dist(lm[8],  wrist);
+const dMiddle = dist(lm[12], wrist);
+const dRing   = dist(lm[16], wrist);
+const dPinky  = dist(lm[20], wrist);
+
+// 距离阈值，可以之后再微调，值越小要求“拳头”越紧
+const fistThreshold = 0.12;
+
+// 当四个指尖都离手腕很近，就认为是拳头
+const isFist =
+    dIndex  < fistThreshold &&
+    dMiddle < fistThreshold &&
+    dRing   < fistThreshold &&
+    dPinky  < fistThreshold;
+
+// 如果是拳头，就不输出方向（保持等待状态）
+if (!isFist && len > dirThreshold) {
+    // 只有在不是拳头 & 手指方向足够明显时才判断方向
+    if (Math.abs(vx) > Math.abs(vy)) {
+        detected = vx > 0 ? "RIGHT" : "LEFT";
+    } else {
+        detected = vy > 0 ? "DOWN" : "UP";
+    }
+}
+ 
+ 
 
         if (detected === currentAction) actionCounter++;
         else if (detected) { currentAction = detected; actionCounter = 1; }
