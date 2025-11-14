@@ -2,165 +2,132 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>MediaPipe Hands + micro:bit (优化版)</title>
+  <title>Hand Gesture → micro:bit</title>
   <style>
-    body { font-family: sans-serif; text-align: center; margin: 10px; }
-    video, canvas { width: 100%; max-width: 400px; margin: 5px 0; }
-    #status { font-size: 18px; color: blue; margin: 5px; }
-    #action { font-size: 24px; font-weight: bold; margin: 5px; color: red; }
-    #connectBtn { font-size: 18px; padding: 5px 10px; margin: 10px; }
+    video, canvas { width: 100%; max-width: 400px; }
+    button { margin: 5px; padding: 10px; }
   </style>
 </head>
-
 <body>
-  <h2>MediaPipe Hands - Gesture Control micro:bit</h2>
-  <div id="status">初始化中...</div>
-  <div id="action">等待动作...</div>
-  <button id="connectBtn">连接 micro:bit</button>
+  <h2>MediaPipe Hands + micro:bit 舵机控制</h2>
+
   <video id="video" autoplay playsinline></video>
   <canvas id="canvas"></canvas>
 
+  <p>
+    <button id="connectBtn">扫描并连接 micro:bit</button>
+    <button id="retryBtn" style="display:none;">重新扫描</button>
+  </p>
+  <p id="status">状态：等待操作...</p>
+
   <script type="module">
-    import { HandLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+    import { HandLandmarker, FilesetResolver, DrawingUtils } from 
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
 
     const video = document.getElementById("video");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
-    const statusEl = document.getElementById("status");
-    const actionEl = document.getElementById("action");
+    const status = document.getElementById("status");
     const connectBtn = document.getElementById("connectBtn");
+    const retryBtn = document.getElementById("retryBtn");
 
     let handLandmarker;
-    let lastX = null;
-    let lastY = null;
+    let microbitDevice, microbitServer, uartService, txCharacteristic;
 
-    // Bluetooth
-    let txCharacteristic;
-
-    const UART_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
-    const TX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
-
-    async function connectMicrobit() {
-      if (!navigator.bluetooth) {
-        alert("Web Bluetooth 不支持，请使用 Chrome 或 Edge，并确保是 HTTPS 页面！");
-        statusEl.textContent = "浏览器不支持 Web Bluetooth";
-        return;
-      }
-
+    // --- 蓝牙相关 ---
+    async function scanMicrobit() {
+      status.textContent = "状态：请求扫描 micro:bit...";
       try {
-        statusEl.textContent = "扫描 micro:bit...";
-        const device = await navigator.bluetooth.requestDevice({
-          filters: [{ services: [UART_SERVICE_UUID] }]
+        microbitDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ services: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e'] }]
         });
-
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(UART_SERVICE_UUID);
-        txCharacteristic = await service.getCharacteristic(TX_CHAR_UUID);
-
-        statusEl.textContent = "micro:bit 已连接";
-        connectBtn.disabled = true;
-        connectBtn.textContent = "已连接";
-      } catch (err) {
-        statusEl.textContent = "连接失败，请检查蓝牙或权限：" + err;
+        status.textContent = `状态：找到设备 ${microbitDevice.name}，正在连接...`;
+        microbitServer = await microbitDevice.gatt.connect();
+        uartService = await microbitServer.getPrimaryService('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
+        txCharacteristic = await uartService.getCharacteristic('6e400002-b5a3-f393-e0a9-e50e24dcca9e'); // TX
+        status.textContent = `状态：已连接 ${microbitDevice.name}!`;
+        retryBtn.style.display = "none";
+      } catch(err) {
         console.error(err);
-        alert("连接失败，请确保蓝牙已开启并允许网页访问设备。");
+        status.textContent = `扫描失败或被取消: ${err.message}`;
+        retryBtn.style.display = "inline";
       }
     }
 
-    connectBtn.addEventListener("click", connectMicrobit);
+    connectBtn.addEventListener('click', scanMicrobit);
+    retryBtn.addEventListener('click', scanMicrobit);
 
-    async function sendToMicrobit(message) {
-      if (!txCharacteristic) return;
-      const encoder = new TextEncoder();
-      try {
-        await txCharacteristic.writeValue(encoder.encode(message + "\n"));
-      } catch (err) {
-        console.error("发送失败", err);
-      }
-    }
-
-    async function init() {
-      statusEl.textContent = "正在加载模型...";
-      try {
-        const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-        );
-
-        handLandmarker = await HandLandmarker.createFromOptions(vision, {
-          baseOptions: { modelAssetPath: "./hand_landmarker.task" },
-          runningMode: "VIDEO",
-          numHands: 1,
-        });
-
-        statusEl.textContent = "模型加载完成，正在启动摄像头...";
-        startCamera();
-      } catch (err) {
-        statusEl.textContent = "模型加载失败，请检查文件路径或刷新页面。";
-        console.error(err);
-      }
+    // --- MediaPipe Hands 初始化 ---
+    async function initHandLandmarker() {
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+      );
+      handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            "https://YOUR_OWN_PATH/hand_landmarker.task" // 替换成你上传的模型路径
+        },
+        runningMode: "VIDEO",
+        numHands: 1
+      });
+      startCamera();
     }
 
     function startCamera() {
-      navigator.mediaDevices.getUserMedia({ video: true })
-      .then((stream) => {
+      navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
         video.srcObject = stream;
         video.onloadedmetadata = () => {
           video.play();
-          statusEl.textContent = "摄像头启动成功，检测手势中...";
           requestAnimationFrame(loop);
         };
-      })
-      .catch(err => {
-        statusEl.textContent = "无法访问摄像头，请允许权限并刷新页面。";
-        console.error(err);
       });
     }
 
-    async function loop(timestamp) {
-      if (!handLandmarker) return;
+    function sendCommand(cmd) {
+      if (!txCharacteristic) return;
+      const encoder = new TextEncoder();
+      txCharacteristic.writeValue(encoder.encode(cmd + "\n"));
+    }
 
+    let lastGesture = "";
+
+    async function loop(timestamp) {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
 
       const results = await handLandmarker.detectForVideo(video, timestamp);
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      if (results.landmarks && results.landmarks.length > 0) {
+      if (results.landmarks) {
         const drawingUtils = new DrawingUtils(ctx);
         for (const landmarks of results.landmarks) {
           drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS);
           drawingUtils.drawLandmarks(landmarks);
         }
 
-        const wrist = results.landmarks[0][0];
-        let action = "等待动作...";
+        // --- 简单手势识别示例 ---
+        const lm = results.landmarks[0];
+        let gesture = "";
+        const dx = lm[8].x - lm[5].x; // 食指指尖 - 手腕
+        const dy = lm[8].y - lm[5].y;
 
-        if (lastX !== null && lastY !== null) {
-          const dx = wrist.x - lastX;
-          const dy = wrist.y - lastY;
-
-          if (Math.abs(dx) > Math.abs(dy)) {
-            if (dx > 0.02) action = "RIGHT";
-            else if (dx < -0.02) action = "LEFT";
-          } else {
-            if (dy > 0.02) action = "DOWN";
-            else if (dy < -0.02) action = "UP";
-          }
+        if (Math.abs(dx) > Math.abs(dy)) {
+          gesture = dx > 0 ? "RIGHT" : "LEFT";
+        } else {
+          gesture = dy > 0 ? "DOWN" : "UP";
         }
 
-        lastX = wrist.x;
-        lastY = wrist.y;
-        actionEl.textContent = action;
-
-        await sendToMicrobit(action);
-      } else {
-        actionEl.textContent = "没有检测到手";
+        if (gesture !== lastGesture) {
+          lastGesture = gesture;
+          status.textContent = `手势：${gesture}`;
+          sendCommand(gesture); // 发送给 micro:bit
+        }
       }
 
       requestAnimationFrame(loop);
     }
 
-    window.addEventListener("load", init);
+    initHandLandmarker();
   </script>
 </body>
 </html>
