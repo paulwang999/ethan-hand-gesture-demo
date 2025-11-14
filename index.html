@@ -1,9 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>MediaPipe Hands + micro:bit 可调灵敏度（左右上下）</title>
+<style>
+body { text-align: center; font-family: sans-serif; margin: 10px; }
+video, canvas { width: 45%; margin: 5px; border: 1px solid #333; vertical-align: top; }
+#status { color: blue; font-size: 18px; }
+#action { color: red; font-size: 24px; font-weight: bold; }
+.slider-container { margin: 5px 0; }
+</style>
+</head>
+<body>
+
+<h2>MediaPipe Hands - USB micro:bit（食指控制 左右上下）</h2>
+<div id="status">初始化...</div>
+<div id="action">等待动作...</div>
+<button id="connectBtn">连接 micro:bit</button>
+<br>
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
+
+<div class="slider-container">
+    <label>手指方向力度阈值 (dirThreshold): <span id="moveVal">0.05</span></label><br>
+    <input type="range" id="moveSlider" min="0.02" max="0.15" step="0.01" value="0.05">
+</div>
+<div class="slider-container">
+    <label>连续帧数 (framesNeeded): <span id="frameVal">2</span></label><br>
+    <input type="range" id="frameSlider" min="1" max="5" step="1" value="2">
+</div>
+<div class="slider-container">
+    <label>冷却时间(ms): <span id="coolVal">150</span></label><br>
+    <input type="range" id="coolSlider" min="50" max="500" step="10" value="150">
+</div>
+
 <script type="module">
-import {
-  HandLandmarker,
-  FilesetResolver,
-  DrawingUtils
-} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+import { HandLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
 
 const statusEl = document.getElementById("status");
 const actionEl = document.getElementById("action");
@@ -12,160 +44,182 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const connectBtn = document.getElementById("connectBtn");
 
-// USB 串口
-let port = null;
-let writer = null;
+// USB micro:bit
+let port;
+let writer;
 
-// 方向阈值（用手指方向，数值越小越灵敏，太小会抖）
-let dirThreshold = 0.08;   // 手指向量长度最小值
-let framesNeeded = 3;      // 需要连续多少帧同一个方向
-let cooldown = 150;        // 冷却时间(ms)
+// 手势判定参数（用食指方向）
+let dirThreshold = parseFloat(document.getElementById("moveSlider").value); // 手指向量最小长度
+let framesNeeded = parseInt(document.getElementById("frameSlider").value);
+let cooldown = parseInt(document.getElementById("coolSlider").value);
 
-// 去抖动状态
-let currentAction = null;
-let actionCounter = 0;
-let lastSent = 0;
-
-// 把英文动作转中文
-function toChinese(a) {
-  return a === "LEFT"  ? "左" :
-         a === "RIGHT" ? "右" :
-         a === "UP"    ? "上" :
-         a === "DOWN"  ? "下" :
-         "等待动作...";
-}
-
-// 串口发送给 micro:bit
-async function sendAction(a) {
-  if (!writer) return;
-  let msg = "0";
-  if (a === "LEFT")  msg = "L";
-  if (a === "RIGHT") msg = "R";
-  if (a === "UP")    msg = "U";
-  if (a === "DOWN")  msg = "D";
-  await writer.write(new TextEncoder().encode(msg + "\n"));
-}
-
-// 连接 micro:bit (USB)
-connectBtn.addEventListener("click", async () => {
-  try {
-    port = await navigator.serial.requestPort();
-    await port.open({ baudRate: 115200 });
-    writer = port.writable.getWriter();
-    connectBtn.disabled = true;
-    statusEl.textContent = "micro:bit 已连接（USB）";
-  } catch (e) {
-    statusEl.textContent = "连接失败：" + e;
-    console.error(e);
-  }
+// slider 事件
+document.getElementById("moveSlider").addEventListener("input", e=>{
+    dirThreshold = parseFloat(e.target.value);
+    document.getElementById("moveVal").textContent = dirThreshold.toFixed(2);
+});
+document.getElementById("frameSlider").addEventListener("input", e=>{
+    framesNeeded = parseInt(e.target.value);
+    document.getElementById("frameVal").textContent = framesNeeded;
+});
+document.getElementById("coolSlider").addEventListener("input", e=>{
+    cooldown = parseInt(e.target.value);
+    document.getElementById("coolVal").textContent = cooldown;
 });
 
-// MediaPipe 初始化
+// 初始化显示
+document.getElementById("moveVal").textContent = dirThreshold.toFixed(2);
+document.getElementById("frameVal").textContent = framesNeeded;
+document.getElementById("coolVal").textContent = cooldown;
+
+// 连接 micro:bit
+connectBtn.addEventListener("click", async () => {
+    try {
+        if (!("serial" in navigator)) {
+            statusEl.textContent = "当前浏览器不支持 Web Serial，请用桌面版 Chrome 打开";
+            return;
+        }
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        writer = port.writable.getWriter();
+        statusEl.textContent = "micro:bit 已连接";
+        connectBtn.disabled = true;
+    } catch(e) {
+        statusEl.textContent = "连接失败：" + e;
+        console.error(e);
+    }
+});
+
+// 状态：去抖
 let handLandmarker;
+let currentAction = null;
+let actionCounter = 0;
+let lastSentTime = 0;
 
+// 英文动作 → 中文
+function actionToChinese(action) {
+    switch (action) {
+        case "LEFT":  return "左";
+        case "RIGHT": return "右";
+        case "UP":    return "上";
+        case "DOWN":  return "下";
+        default:      return "等待动作...";
+    }
+}
+
+// 发送串口
+async function sendAction(action) {
+    if (!writer) return;
+    let sendMsg = "0";
+    if (action === "LEFT")  sendMsg = "L";
+    if (action === "RIGHT") sendMsg = "R";
+    if (action === "UP")    sendMsg = "U";
+    if (action === "DOWN")  sendMsg = "D";
+    await writer.write(new TextEncoder().encode(sendMsg + "\n"));
+}
+
+// 初始化 MediaPipe
 async function init() {
-  statusEl.textContent = "加载模型...";
-  const vision = await FilesetResolver.forVisionTasks(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-  );
-
-  handLandmarker = await HandLandmarker.createFromOptions(vision, {
-    baseOptions: { modelAssetPath: "./hand_landmarker.task" },
-    runningMode: "VIDEO",
-    numHands: 1,
-  });
-
-  statusEl.textContent = "模型加载完成，启动摄像头...";
-  startCamera();
+    statusEl.textContent = "加载模型...";
+    const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+    );
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: "./hand_landmarker.task" },
+        runningMode: "VIDEO",
+        numHands: 1,
+    });
+    statusEl.textContent = "模型加载完成，启动摄像头...";
+    startCamera();
 }
 
 function startCamera() {
-  navigator.mediaDevices.getUserMedia({ video: true })
-    .then(stream => {
-      video.srcObject = stream;
-      video.onloadedmetadata = () => {
-        video.play();
-        statusEl.textContent = "摄像头已启动";
-        requestAnimationFrame(loop);
-      };
-    })
-    .catch(err => {
-      statusEl.textContent = "无法访问摄像头：" + err;
-      console.error(err);
-    });
+    navigator.mediaDevices.getUserMedia({ video:true })
+        .then(stream=>{
+            video.srcObject = stream;
+            video.onloadedmetadata = ()=>{
+                video.play();
+                statusEl.textContent="摄像头启动成功";
+                requestAnimationFrame(loop);
+            };
+        })
+        .catch(err=>{
+            statusEl.textContent="无法访问摄像头："+err;
+            console.error(err);
+        });
 }
 
-async function loop(timestamp) {
-  if (!handLandmarker) return;
+async function loop(timestamp){
+    if(!handLandmarker) return;
 
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
 
-  const results = await handLandmarker.detectForVideo(video, timestamp);
+    const results = await handLandmarker.detectForVideo(video, timestamp);
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
 
-  if (results.landmarks && results.landmarks.length > 0) {
-    const lm = results.landmarks[0]; // 第一只手
-    const drawingUtils = new DrawingUtils(ctx);
-    drawingUtils.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS);
-    drawingUtils.drawLandmarks(lm);
+    if(results.landmarks && results.landmarks.length>0){
+        const lmList = results.landmarks[0];
+        const drawingUtils = new DrawingUtils(ctx);
+        drawingUtils.drawConnectors(lmList, HandLandmarker.HAND_CONNECTIONS);
+        drawingUtils.drawLandmarks(lmList);
 
-    // wrist: lm[0], index fingertip: lm[8]
-    const wrist = lm[0];
-    const tip   = lm[8];
+        // wrist: 0, index fingertip: 8
+        const wrist = lmList[0];
+        const tip   = lmList[8];
 
-    const vx = tip.x - wrist.x; // 水平向量，>0 右，<0 左
-    const vy = tip.y - wrist.y; // 垂直向量，>0 下，<0 上
+        const vx = tip.x - wrist.x; // >0 右，<0 左
+        const vy = tip.y - wrist.y; // >0 下，<0 上（注意：屏幕坐标 y 向下为正）
 
-    let detected = null;
+        const len = Math.hypot(vx, vy);
+        let detectedAction = null;
 
-    // 向量长度足够才算是“明确指向”
-    const len = Math.hypot(vx, vy);
-    if (len > dirThreshold) {
-      if (Math.abs(vx) > Math.abs(vy)) {
-        // 左右比上下更明显
-        detected = vx > 0 ? "RIGHT" : "LEFT";
-      } else {
-        // 上下比左右更明显（注意 y 越小越靠上）
-        detected = vy > 0 ? "DOWN" : "UP";
-      }
-    }
+        // 确保手指方向足够明显
+        if (len > dirThreshold) {
+            if (Math.abs(vx) > Math.abs(vy)) {
+                detectedAction = vx > 0 ? "RIGHT" : "LEFT";
+            } else {
+                detectedAction = vy > 0 ? "DOWN" : "UP";
+            }
+        }
 
-    // 去抖：检测连续多帧同一方向
-    if (detected && detected === currentAction) {
-      actionCounter++;
-    } else if (detected) {
-      currentAction = detected;
-      actionCounter = 1;
+        // 去抖：连续帧判断
+        if (detectedAction && detectedAction === currentAction) {
+            actionCounter++;
+        } else if (detectedAction) {
+            currentAction = detectedAction;
+            actionCounter = 1;
+        } else {
+            currentAction = null;
+            actionCounter = 0;
+        }
+
+        const now = performance.now();
+
+        if (
+            currentAction &&
+            actionCounter >= framesNeeded &&
+            now - lastSentTime > cooldown
+        ) {
+            actionEl.textContent = actionToChinese(currentAction);
+            await sendAction(currentAction);
+            lastSentTime = now;
+        } else if (!currentAction && now - lastSentTime > 300) {
+            actionEl.textContent = "等待动作...";
+        }
+
     } else {
-      currentAction = null;
-      actionCounter = 0;
+        actionEl.textContent="没有检测到手";
+        currentAction = null;
+        actionCounter = 0;
     }
 
-    const now = performance.now();
-
-    if (
-      currentAction &&
-      actionCounter >= framesNeeded &&
-      now - lastSent > cooldown
-    ) {
-      actionEl.textContent = toChinese(currentAction);
-      await sendAction(currentAction);
-      lastSent = now;
-    } else if (!currentAction && now - lastSent > 300) {
-      actionEl.textContent = "等待动作...";
-    }
-
-  } else {
-    actionEl.textContent = "没有检测到手";
-    currentAction = null;
-    actionCounter = 0;
-  }
-
-  requestAnimationFrame(loop);
+    requestAnimationFrame(loop);
 }
 
 window.addEventListener("load", init);
 </script>
+</body>
+</html>
