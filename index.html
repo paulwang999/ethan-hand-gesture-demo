@@ -2,20 +2,21 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>MediaPipe Hands + micro:bit USB</title>
+<title>MediaPipe Hands + micro:bit USB (稳定版)</title>
 <style>
 body { text-align: center; font-family: sans-serif; margin: 10px; }
-video, canvas { width: 100%; max-width: 400px; margin: 5px 0; }
+video, canvas { width: 45%; margin: 5px; border: 1px solid #333; vertical-align: top; }
 #status { color: blue; font-size: 18px; }
 #action { color: red; font-size: 24px; font-weight: bold; }
 </style>
 </head>
 <body>
 
-<h2>MediaPipe Hands - USB micro:bit</h2>
+<h2>MediaPipe Hands - USB micro:bit (稳定版)</h2>
 <div id="status">初始化...</div>
 <div id="action">等待动作...</div>
 <button id="connectBtn">连接 micro:bit</button>
+<br>
 <video id="video" autoplay playsinline></video>
 <canvas id="canvas"></canvas>
 
@@ -32,6 +33,14 @@ let handLandmarker;
 let lastX = null;
 let lastY = null;
 
+// 坐标平滑
+let history = [];
+const maxHistory = 5;
+
+// 连续帧判定
+let actionCounter = 0;
+let currentAction = null;
+
 // USB 串口
 let port;
 let writer;
@@ -42,6 +51,7 @@ document.getElementById("connectBtn").addEventListener("click", async () => {
         await port.open({ baudRate: 115200 });
         writer = port.writable.getWriter();
         statusEl.textContent = "micro:bit 已连接";
+        connectBtn.disabled = true;
     } catch(e) {
         statusEl.textContent = "连接失败：" + e;
         console.error(e);
@@ -50,9 +60,14 @@ document.getElementById("connectBtn").addEventListener("click", async () => {
 
 async function sendAction(action) {
     if (!writer) return;
-    const data = new TextEncoder().encode(action + "\n");
+    let sendMsg = action;
+    if (action === "UP") sendMsg = "1";
+    else if (action === "DOWN") sendMsg = "2";
+    else if (action === "LEFT") sendMsg = "3";
+    else if (action === "RIGHT") sendMsg = "4";
+    else if (action === "FIST") sendMsg = "5";
+    const data = new TextEncoder().encode(sendMsg + "\n");
     await writer.write(data);
-    console.log("发送:", action);
 }
 
 async function init() {
@@ -92,6 +107,7 @@ async function loop(timestamp) {
     canvas.height = video.videoHeight;
 
     const results = await handLandmarker.detectForVideo(video, timestamp);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     if (results.landmarks && results.landmarks.length > 0) {
@@ -102,25 +118,57 @@ async function loop(timestamp) {
         }
 
         const wrist = results.landmarks[0][0];
-        let action = "等待动作...";
 
-        if (lastX !== null && lastY !== null) {
-            const dx = wrist.x - lastX;
-            const dy = wrist.y - lastY;
-            if (Math.abs(dx) > Math.abs(dy)) {
-                if (dx > 0.02) action = "RIGHT";
-                else if (dx < -0.02) action = "LEFT";
+        // 平滑坐标
+        history.push({x: wrist.x, y: wrist.y});
+        if (history.length > maxHistory) history.shift();
+        const avgX = history.reduce((sum,h)=>sum+h.x,0)/history.length;
+        const avgY = history.reduce((sum,h)=>sum+h.y,0)/history.length;
+
+        // 动作判定
+        let detectedAction = "等待动作...";
+
+        const landmarks = results.landmarks[0];
+        function dist(a, b) { return Math.hypot(a.x-b.x, a.y-b.y); }
+        const thresholdFist = 0.1;
+        const dThumb = dist(landmarks[4], wrist);
+        const dIndex = dist(landmarks[8], wrist);
+        const dMiddle = dist(landmarks[12], wrist);
+        const dRing = dist(landmarks[16], wrist);
+        const dPinky = dist(landmarks[20], wrist);
+        if (dThumb<thresholdFist && dIndex<thresholdFist && dMiddle<thresholdFist && dRing<thresholdFist && dPinky<thresholdFist){
+            detectedAction = "FIST";
+        } else if (lastX!==null && lastY!==null){
+            const dx = avgX - lastX;
+            const dy = avgY - lastY;
+            const moveThreshold = 0.05;
+            if (Math.abs(dx) > Math.abs(dy)){
+                if (dx>moveThreshold) detectedAction="RIGHT";
+                else if (dx<-moveThreshold) detectedAction="LEFT";
             } else {
-                if (dy > 0.02) action = "DOWN";
-                else if (dy < -0.02) action = "UP";
+                if (dy>moveThreshold) detectedAction="DOWN";
+                else if (dy<-moveThreshold) detectedAction="UP";
             }
         }
 
-        lastX = wrist.x;
-        lastY = wrist.y;
-        actionEl.textContent = action;
+        lastX = avgX;
+        lastY = avgY;
 
-        await sendAction(action);
+        // 连续帧判定
+        if (detectedAction === currentAction) {
+            actionCounter++;
+        } else {
+            currentAction = detectedAction;
+            actionCounter = 1;
+        }
+
+        if (actionCounter >= 3 && detectedAction !== "等待动作...") {
+            actionEl.textContent = detectedAction;
+            await sendAction(detectedAction);
+        } else {
+            actionEl.textContent = "等待动作...";
+        }
+
     } else {
         actionEl.textContent = "没有检测到手";
     }
