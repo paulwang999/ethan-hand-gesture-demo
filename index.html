@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <title>MediaPipe Hands - Gesture Demo</title>
   <style>
-    body { font-family: sans-serif; text-align: center; }
+    body { font-family: sans-serif; text-align: center; margin: 10px; }
     video, canvas { width: 100%; max-width: 400px; }
     #status { font-size: 18px; margin: 10px; color: blue; }
     #action { font-size: 24px; font-weight: bold; margin: 10px; color: red; }
@@ -13,7 +13,7 @@
 
 <body>
   <h2>MediaPipe Hands - Hand Tracking</h2>
-  <div id="status">模型加载中，请稍等...</div>
+  <div id="status">初始化中...</div>
   <div id="action">等待动作...</div>
   <video id="video" autoplay playsinline></video>
   <canvas id="canvas"></canvas>
@@ -33,36 +33,46 @@
 
     async function init() {
       statusEl.textContent = "正在加载模型...";
-      const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-      );
+      try {
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+        );
 
-      handLandmarker = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm/hand_landmarker.task",
-        },
-        runningMode: "VIDEO",
-        numHands: 1,
-      });
+        handLandmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm/hand_landmarker.task",
+          },
+          runningMode: "VIDEO",
+          numHands: 1,
+        });
 
-      statusEl.textContent = "模型加载完成，等待手势...";
-      startCamera();
+        statusEl.textContent = "模型加载完成，正在启动摄像头...";
+        startCamera();
+      } catch (err) {
+        statusEl.textContent = "模型加载失败，请检查网络或刷新页面。";
+        console.error(err);
+      }
     }
 
     function startCamera() {
-      navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
+      navigator.mediaDevices.getUserMedia({ video: true })
+      .then((stream) => {
         video.srcObject = stream;
         video.onloadedmetadata = () => {
           video.play();
+          statusEl.textContent = "摄像头启动成功，检测手势中...";
           requestAnimationFrame(loop);
         };
-      }).catch(err => {
-        statusEl.textContent = "无法访问摄像头，请允许权限。";
+      })
+      .catch(err => {
+        statusEl.textContent = "无法访问摄像头，请允许权限并刷新页面。";
         console.error(err);
       });
     }
 
     async function loop(timestamp) {
+      if (!handLandmarker) return;
+
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
 
@@ -76,8 +86,7 @@
           drawingUtils.drawLandmarks(landmarks);
         }
 
-        // 动作识别（用手腕关键点）
-        const wrist = results.landmarks[0][0]; // 手腕
+        const wrist = results.landmarks[0][0]; // 手腕关键点
         let action = "等待动作...";
 
         if (lastX !== null && lastY !== null) {
