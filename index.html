@@ -193,7 +193,7 @@ async function loop(timestamp) {
         const dRing   = dist(lm[16], wrist);  // 无名指尖
         const dPinky  = dist(lm[20], wrist);  // 小指尖
 
-        const fistThreshold = 0.12;  // 越小要求拳头越紧，越大越容易判定为拳头
+        const fistThreshold = 0.15;  // 越小要求拳头越紧，越大越容易判定为拳头
 
         const isFist =
             dIndex  < fistThreshold &&
