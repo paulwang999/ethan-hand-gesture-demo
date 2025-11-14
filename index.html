@@ -5,9 +5,9 @@
   <title>MediaPipe Hands + micro:bit</title>
   <style>
     body { font-family: sans-serif; text-align: center; margin: 10px; }
-    video, canvas { width: 100%; max-width: 400px; }
-    #status { font-size: 18px; margin: 10px; color: blue; }
-    #action { font-size: 24px; font-weight: bold; margin: 10px; color: red; }
+    video, canvas { width: 100%; max-width: 400px; margin: 5px 0; }
+    #status { font-size: 18px; color: blue; margin: 5px; }
+    #action { font-size: 24px; font-weight: bold; margin: 5px; color: red; }
     #connectBtn { font-size: 18px; padding: 5px 10px; margin: 10px; }
   </style>
 </head>
@@ -34,12 +34,9 @@
     let lastX = null;
     let lastY = null;
 
-    // Bluetooth 相关
-    let microbitDevice;
-    let uartService;
+    // Bluetooth
     let txCharacteristic;
 
-    // micro:bit UART UUID
     const UART_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
     const TX_CHAR_UUID = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
 
@@ -47,12 +44,12 @@
     async function connectMicrobit() {
       try {
         statusEl.textContent = "扫描 micro:bit...";
-        microbitDevice = await navigator.bluetooth.requestDevice({
+        const device = await navigator.bluetooth.requestDevice({
           filters: [{ services: [UART_SERVICE_UUID] }]
         });
-        const server = await microbitDevice.gatt.connect();
-        uartService = await server.getPrimaryService(UART_SERVICE_UUID);
-        txCharacteristic = await uartService.getCharacteristic(TX_CHAR_UUID);
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(UART_SERVICE_UUID);
+        txCharacteristic = await service.getCharacteristic(TX_CHAR_UUID);
         statusEl.textContent = "micro:bit 已连接";
       } catch (err) {
         statusEl.textContent = "连接失败：" + err;
@@ -121,7 +118,6 @@
           drawingUtils.drawLandmarks(landmarks);
         }
 
-        // 手腕关键点判断动作
         const wrist = results.landmarks[0][0];
         let action = "等待动作...";
 
@@ -151,7 +147,8 @@
       requestAnimationFrame(loop);
     }
 
-    init();
+    // 页面加载后初始化
+    window.addEventListener("load", init);
   </script>
 </body>
 </html>
