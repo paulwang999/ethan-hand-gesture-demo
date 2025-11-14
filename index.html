@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>MediaPipe Hands + micro:bit USB (稳定版)</title>
+<title>MediaPipe Hands + micro:bit (折中版)</title>
 <style>
 body { text-align: center; font-family: sans-serif; margin: 10px; }
 video, canvas { width: 45%; margin: 5px; border: 1px solid #333; vertical-align: top; }
@@ -12,7 +12,7 @@ video, canvas { width: 45%; margin: 5px; border: 1px solid #333; vertical-align:
 </head>
 <body>
 
-<h2>MediaPipe Hands - USB micro:bit (稳定版)</h2>
+<h2>MediaPipe Hands - USB micro:bit (折中版)</h2>
 <div id="status">初始化...</div>
 <div id="action">等待动作...</div>
 <button id="connectBtn">连接 micro:bit</button>
@@ -40,6 +40,10 @@ const maxHistory = 5;
 // 连续帧判定
 let actionCounter = 0;
 let currentAction = null;
+
+// 冷却时间
+let lastSentTime = 0;
+const cooldown = 150; // ms
 
 // USB 串口
 let port;
@@ -136,12 +140,13 @@ async function loop(timestamp) {
         const dMiddle = dist(landmarks[12], wrist);
         const dRing = dist(landmarks[16], wrist);
         const dPinky = dist(landmarks[20], wrist);
+
         if (dThumb<thresholdFist && dIndex<thresholdFist && dMiddle<thresholdFist && dRing<thresholdFist && dPinky<thresholdFist){
             detectedAction = "FIST";
         } else if (lastX!==null && lastY!==null){
             const dx = avgX - lastX;
             const dy = avgY - lastY;
-            const moveThreshold = 0.05;
+            const moveThreshold = 0.03; // 更灵敏
             if (Math.abs(dx) > Math.abs(dy)){
                 if (dx>moveThreshold) detectedAction="RIGHT";
                 else if (dx<-moveThreshold) detectedAction="LEFT";
@@ -154,7 +159,7 @@ async function loop(timestamp) {
         lastX = avgX;
         lastY = avgY;
 
-        // 连续帧判定
+        // 连续帧判定 + 冷却
         if (detectedAction === currentAction) {
             actionCounter++;
         } else {
@@ -162,9 +167,11 @@ async function loop(timestamp) {
             actionCounter = 1;
         }
 
-        if (actionCounter >= 3 && detectedAction !== "等待动作...") {
+        const now = performance.now();
+        if (actionCounter >= 2 && detectedAction !== "等待动作..." && (now - lastSentTime > 150)) {
             actionEl.textContent = detectedAction;
             await sendAction(detectedAction);
+            lastSentTime = now;
         } else {
             actionEl.textContent = "等待动作...";
         }
