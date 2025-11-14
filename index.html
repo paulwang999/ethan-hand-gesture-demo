@@ -2,23 +2,24 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>MediaPipe Hands + micro:bit 左/右/前/后</title>
+<title>MediaPipe Hands + micro:bit 左右上下</title>
 <style>
   body { text-align: center; font-family: sans-serif; margin: 10px; }
-  video, canvas {
-    width: 45%; margin: 5px; border: 1px solid #333; vertical-align: top;
-  }
+  video, canvas { width: 45%; margin: 5px; border: 1px solid #333; vertical-align: top; }
   #status { color: blue; font-size: 18px; }
-  #action { color: red; font-size: 24px; font-weight: bold; }
+  #action { color: red; font-size: 28px; font-weight: bold; }
 </style>
 </head>
-<body>
 
-<h2>MediaPipe Hands - micro:bit 左/右/前/后</h2>
+<body>
+<h2>MediaPipe Hands → micro:bit（左右上下）</h2>
+
 <div id="status">初始化...</div>
 <div id="action">等待动作...</div>
-<button id="connectBtn">连接 micro:bit</button>
+
+<button id="connectBtn">连接 micro:bit（USB串口）</button>
 <br>
+
 <video id="video" autoplay playsinline></video>
 <canvas id="canvas"></canvas>
 
@@ -34,73 +35,67 @@ const actionEl = document.getElementById("action");
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+
 const connectBtn = document.getElementById("connectBtn");
 
-// 串口
-let port;
-let writer;
+// USB 串口
+let port = null;
+let writer = null;
 
-// 手势判定参数（你可以以后做成 slider）
-let moveThresholdXY = 0.03;   // 左右灵敏度
-let moveThresholdZ  = 0.03;   // 前后灵敏度
-let framesNeeded    = 2;      // 需要连续多少帧
-let cooldown        = 150;    // 冷却时间 ms
+// 调参（可以之后做 slider）
+let thresholdXY = 0.03;
+let thresholdY  = 0.03;
+let framesNeeded = 2;
+let cooldown = 150;
 
-// 历史位置平滑
+// 平滑
 let history = [];
 const maxHistory = 5;
-let lastX = null;
-let lastZ = null;
 
-// 去抖
+// 前一帧
+let lastX = null;
+let lastY = null;
+
 let currentAction = null;
 let actionCounter = 0;
-let lastSentTime = 0;
+let lastSent = 0;
 
-// 连接 micro:bit
-connectBtn.addEventListener("click", async () => {
-  try {
-    if (!("serial" in navigator)) {
-      statusEl.textContent = "当前浏览器不支持 Web Serial（建议用桌面版 Chrome）";
-      return;
-    }
-
-    port = await navigator.serial.requestPort();
-    await port.open({ baudRate: 115200 });
-    writer = port.writable.getWriter();
-    statusEl.textContent = "micro:bit 已连接";
-    connectBtn.disabled = true;
-  } catch (e) {
-    statusEl.textContent = "连接失败：" + e;
-    console.error(e);
-  }
-});
-
-// 把英文动作转成中文文字
-function actionToChinese(action) {
-  switch (action) {
-    case "LEFT":    return "左";
-    case "RIGHT":   return "右";
-    case "FORWARD": return "前";
-    case "BACK":    return "后";
-    default:        return "等待动作...";
-  }
+// 中文映射
+function toChinese(a) {
+  return a==="LEFT" ? "左" :
+         a==="RIGHT" ? "右" :
+         a==="UP" ? "上" :
+         a==="DOWN" ? "下" :
+         "等待动作...";
 }
 
-// 发送给 micro:bit
-async function sendAction(action) {
+// 串口发送
+async function sendAction(a) {
   if (!writer) return;
+
   let msg = "0";
-  switch (action) {
-    case "LEFT":    msg = "L"; break;
-    case "RIGHT":   msg = "R"; break;
-    case "FORWARD": msg = "F"; break;
-    case "BACK":    msg = "B"; break;
-  }
+  if (a === "LEFT") msg = "L";
+  if (a === "RIGHT") msg = "R";
+  if (a === "UP") msg = "U";
+  if (a === "DOWN") msg = "D";
+
   await writer.write(new TextEncoder().encode(msg + "\n"));
 }
 
-// MediaPipe 初始化
+// 连接 USB micro:bit
+connectBtn.addEventListener("click", async () => {
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    writer = port.writable.getWriter();
+    connectBtn.disabled = true;
+    statusEl.textContent = "micro:bit 已连接（USB）";
+  } catch(e) {
+    statusEl.textContent = "连接失败：" + e;
+  }
+});
+
+// MediaPipe
 let handLandmarker;
 
 async function init() {
@@ -110,9 +105,7 @@ async function init() {
   );
 
   handLandmarker = await HandLandmarker.createFromOptions(vision, {
-    baseOptions: {
-      modelAssetPath: "./hand_landmarker.task"
-    },
+    baseOptions: { modelAssetPath: "./hand_landmarker.task" },
     runningMode: "VIDEO",
     numHands: 1,
   });
@@ -127,13 +120,12 @@ function startCamera() {
       video.srcObject = stream;
       video.onloadedmetadata = () => {
         video.play();
-        statusEl.textContent = "摄像头启动成功";
+        statusEl.textContent = "摄像头已启动";
         requestAnimationFrame(loop);
       };
     })
     .catch(err => {
       statusEl.textContent = "无法访问摄像头：" + err;
-      console.error(err);
     });
 }
 
@@ -149,63 +141,45 @@ async function loop(timestamp) {
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
   if (results.landmarks && results.landmarks.length > 0) {
-    const lmList = results.landmarks[0]; // 只看一只手
-    const drawingUtils = new DrawingUtils(ctx);
-    drawingUtils.drawConnectors(lmList, HandLandmarker.HAND_CONNECTIONS);
-    drawingUtils.drawLandmarks(lmList);
+    const lm = results.landmarks[0];
+    new DrawingUtils(ctx).drawLandmarks(lm);
 
-    // 手腕：index 0
-    const wrist = lmList[0];
-    history.push({ x: wrist.x, y: wrist.y, z: wrist.z });
+    const wrist = lm[0];
+
+    history.push({ x: wrist.x, y: wrist.y });
     if (history.length > maxHistory) history.shift();
 
-    const avg = history.reduce(
-      (acc, p) => {
-        acc.x += p.x; acc.y += p.y; acc.z += p.z;
-        return acc;
-      },
-      { x: 0, y: 0, z: 0 }
-    );
+    const sum = history.reduce((a, p) => ({
+      x: a.x + p.x, y: a.y + p.y
+    }), { x: 0, y: 0 });
 
-    const n = history.length;
-    const avgX = avg.x / n;
-    const avgZ = avg.z / n;
+    const avgX = sum.x / history.length;
+    const avgY = sum.y / history.length;
 
-    let detectedAction = null;
+    let detected = null;
 
-    if (lastX !== null && lastZ !== null) {
-      const dx = avgX - lastX; // 左右
-      const dz = avgZ - lastZ; // 前后（z 越小越靠近摄像头）
+    if (lastX !== null && lastY !== null) {
+      const dx = avgX - lastX;
+      const dy = avgY - lastY;
 
-      // 比较左右和前后哪个更明显
-      if (Math.abs(dx) > Math.abs(dz)) {
-        if (dx > moveThresholdXY) {
-          detectedAction = "RIGHT";
-        } else if (dx < -moveThresholdXY) {
-          detectedAction = "LEFT";
-        }
+      if (Math.abs(dx) > Math.abs(dy)) {
+        if (dx > thresholdXY) detected = "RIGHT";
+        else if (dx < -thresholdXY) detected = "LEFT";
       } else {
-        if (dz < -moveThresholdZ) {
-          detectedAction = "FORWARD"; // 手向前伸
-        } else if (dz > moveThresholdZ) {
-          detectedAction = "BACK";    // 手往后收
-        }
+        if (dy < -thresholdY) detected = "UP";      // y 变小 → 上
+        else if (dy > thresholdY) detected = "DOWN"; // y 变大 → 下
       }
     }
 
     lastX = avgX;
-    lastZ = avgZ;
+    lastY = avgY;
 
-    // 去抖：需要连续 framesNeeded 帧都是同一个动作
-    if (detectedAction && detectedAction === currentAction) {
+    // 连续帧检测 + cooldown
+    if (detected === currentAction) {
       actionCounter++;
-    } else if (detectedAction) {
-      currentAction = detectedAction;
-      actionCounter = 1;
     } else {
-      // 没有明显动作
-      currentAction = null;
-      actionCounter = 0;
+      currentAction = detected;
+      actionCounter = 1;
     }
 
     const now = performance.now();
@@ -213,13 +187,12 @@ async function loop(timestamp) {
     if (
       currentAction &&
       actionCounter >= framesNeeded &&
-      now - lastSentTime > cooldown
+      now - lastSent > cooldown
     ) {
-      // 触发动作
-      actionEl.textContent = actionToChinese(currentAction);
+      actionEl.textContent = toChinese(currentAction);
       await sendAction(currentAction);
-      lastSentTime = now;
-    } else if (!currentAction && now - lastSentTime > 300) {
+      lastSent = now;
+    } else if (now - lastSent > 300) {
       actionEl.textContent = "等待动作...";
     }
 
@@ -227,7 +200,7 @@ async function loop(timestamp) {
     actionEl.textContent = "没有检测到手";
     history = [];
     lastX = null;
-    lastZ = null;
+    lastY = null;
   }
 
   requestAnimationFrame(loop);
