@@ -34,13 +34,15 @@
     async function init() {
       statusEl.textContent = "正在加载模型...";
       try {
+        // 设置 WASM 路径
         const vision = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
         );
 
+        // 这里改为本地上传的模型文件
         handLandmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm/hand_landmarker.task",
+            modelAssetPath: "./hand_landmarker.task", // 根目录上传的模型
           },
           runningMode: "VIDEO",
           numHands: 1,
@@ -49,7 +51,7 @@
         statusEl.textContent = "模型加载完成，正在启动摄像头...";
         startCamera();
       } catch (err) {
-        statusEl.textContent = "模型加载失败，请检查网络或刷新页面。";
+        statusEl.textContent = "模型加载失败，请检查文件路径或刷新页面。";
         console.error(err);
       }
     }
@@ -86,7 +88,8 @@
           drawingUtils.drawLandmarks(landmarks);
         }
 
-        const wrist = results.landmarks[0][0]; // 手腕关键点
+        // 使用手腕关键点判断动作
+        const wrist = results.landmarks[0][0];
         let action = "等待动作...";
 
         if (lastX !== null && lastY !== null) {
