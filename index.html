@@ -2,23 +2,37 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>MediaPipe Hands + micro:bit (折中版)</title>
+<title>MediaPipe Hands + micro:bit 可调灵敏度</title>
 <style>
 body { text-align: center; font-family: sans-serif; margin: 10px; }
 video, canvas { width: 45%; margin: 5px; border: 1px solid #333; vertical-align: top; }
 #status { color: blue; font-size: 18px; }
 #action { color: red; font-size: 24px; font-weight: bold; }
+.slider-container { margin: 5px 0; }
 </style>
 </head>
 <body>
 
-<h2>MediaPipe Hands - USB micro:bit (折中版)</h2>
+<h2>MediaPipe Hands - USB micro:bit (可调灵敏度)</h2>
 <div id="status">初始化...</div>
 <div id="action">等待动作...</div>
 <button id="connectBtn">连接 micro:bit</button>
 <br>
 <video id="video" autoplay playsinline></video>
 <canvas id="canvas"></canvas>
+
+<div class="slider-container">
+    <label>动作灵敏度 (moveThreshold): <span id="moveVal">0.03</span></label><br>
+    <input type="range" id="moveSlider" min="0.01" max="0.1" step="0.01" value="0.03">
+</div>
+<div class="slider-container">
+    <label>连续帧数 (framesNeeded): <span id="frameVal">2</span></label><br>
+    <input type="range" id="frameSlider" min="1" max="5" step="1" value="2">
+</div>
+<div class="slider-container">
+    <label>冷却时间(ms): <span id="coolVal">150</span></label><br>
+    <input type="range" id="coolSlider" min="50" max="500" step="10" value="150">
+</div>
 
 <script type="module">
 import { HandLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
@@ -29,25 +43,27 @@ const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
-let handLandmarker;
-let lastX = null;
-let lastY = null;
-
-// 坐标平滑
-let history = [];
-const maxHistory = 5;
-
-// 连续帧判定
-let actionCounter = 0;
-let currentAction = null;
-
-// 冷却时间
-let lastSentTime = 0;
-const cooldown = 150; // ms
-
-// USB 串口
+// USB micro:bit
 let port;
 let writer;
+
+// 手势判定参数
+let moveThreshold = parseFloat(document.getElementById("moveSlider").value);
+let framesNeeded = parseInt(document.getElementById("frameSlider").value);
+let cooldown = parseInt(document.getElementById("coolSlider").value);
+
+document.getElementById("moveSlider").addEventListener("input", e=>{
+    moveThreshold = parseFloat(e.target.value);
+    document.getElementById("moveVal").textContent = moveThreshold.toFixed(2);
+});
+document.getElementById("frameSlider").addEventListener("input", e=>{
+    framesNeeded = parseInt(e.target.value);
+    document.getElementById("frameVal").textContent = framesNeeded;
+});
+document.getElementById("coolSlider").addEventListener("input", e=>{
+    cooldown = parseInt(e.target.value);
+    document.getElementById("coolVal").textContent = cooldown;
+});
 
 document.getElementById("connectBtn").addEventListener("click", async () => {
     try {
@@ -62,16 +78,20 @@ document.getElementById("connectBtn").addEventListener("click", async () => {
     }
 });
 
+// 手势识别
+let handLandmarker;
+let lastX = null;
+let lastY = null;
+let history = [];
+const maxHistory = 5;
+let actionCounter = 0;
+let currentAction = null;
+let lastSentTime = 0;
+
 async function sendAction(action) {
     if (!writer) return;
-    let sendMsg = action;
-    if (action === "UP") sendMsg = "1";
-    else if (action === "DOWN") sendMsg = "2";
-    else if (action === "LEFT") sendMsg = "3";
-    else if (action === "RIGHT") sendMsg = "4";
-    else if (action === "FIST") sendMsg = "5";
-    const data = new TextEncoder().encode(sendMsg + "\n");
-    await writer.write(data);
+    let sendMsg = action==="UP"?"1":action==="DOWN"?"2":action==="LEFT"?"3":action==="RIGHT"?"4":action==="FIST"?"5":"0";
+    await writer.write(new TextEncoder().encode(sendMsg+"\n"));
 }
 
 async function init() {
@@ -89,95 +109,66 @@ async function init() {
 }
 
 function startCamera() {
-    navigator.mediaDevices.getUserMedia({ video: true })
-        .then(stream => {
-            video.srcObject = stream;
-            video.onloadedmetadata = () => {
-                video.play();
-                statusEl.textContent = "摄像头启动成功，手势识别中...";
-                requestAnimationFrame(loop);
-            };
+    navigator.mediaDevices.getUserMedia({ video:true })
+        .then(stream=>{
+            video.srcObject=stream;
+            video.onloadedmetadata=()=>{ video.play(); statusEl.textContent="摄像头启动成功"; requestAnimationFrame(loop);}
         })
-        .catch(err => {
-            statusEl.textContent = "无法访问摄像头：" + err;
-            console.error(err);
-        });
+        .catch(err=>{statusEl.textContent="无法访问摄像头："+err; console.error(err);});
 }
 
-async function loop(timestamp) {
-    if (!handLandmarker) return;
-
+async function loop(timestamp){
+    if(!handLandmarker) return;
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-
     const results = await handLandmarker.detectForVideo(video, timestamp);
     ctx.clearRect(0,0,canvas.width,canvas.height);
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
 
-    if (results.landmarks && results.landmarks.length > 0) {
-        const drawingUtils = new DrawingUtils(ctx);
-        for (const landmarks of results.landmarks) {
-            drawingUtils.drawConnectors(landmarks, HandLandmarker.HAND_CONNECTIONS);
-            drawingUtils.drawLandmarks(landmarks);
-        }
+    if(results.landmarks && results.landmarks.length>0){
+        const drawingUtils=new DrawingUtils(ctx);
+        for(const l of results.landmarks){ drawingUtils.drawConnectors(l, HandLandmarker.HAND_CONNECTIONS); drawingUtils.drawLandmarks(l); }
 
         const wrist = results.landmarks[0][0];
+        history.push({x:wrist.x,y:wrist.y});
+        if(history.length>maxHistory) history.shift();
+        const avgX = history.reduce((s,h)=>s+h.x,0)/history.length;
+        const avgY = history.reduce((s,h)=>s+h.y,0)/history.length;
 
-        // 平滑坐标
-        history.push({x: wrist.x, y: wrist.y});
-        if (history.length > maxHistory) history.shift();
-        const avgX = history.reduce((sum,h)=>sum+h.x,0)/history.length;
-        const avgY = history.reduce((sum,h)=>sum+h.y,0)/history.length;
-
-        // 动作判定
-        let detectedAction = "等待动作...";
-
-        const landmarks = results.landmarks[0];
-        function dist(a, b) { return Math.hypot(a.x-b.x, a.y-b.y); }
-        const thresholdFist = 0.1;
-        const dThumb = dist(landmarks[4], wrist);
-        const dIndex = dist(landmarks[8], wrist);
-        const dMiddle = dist(landmarks[12], wrist);
-        const dRing = dist(landmarks[16], wrist);
-        const dPinky = dist(landmarks[20], wrist);
-
-        if (dThumb<thresholdFist && dIndex<thresholdFist && dMiddle<thresholdFist && dRing<thresholdFist && dPinky<thresholdFist){
-            detectedAction = "FIST";
-        } else if (lastX!==null && lastY!==null){
-            const dx = avgX - lastX;
-            const dy = avgY - lastY;
-            const moveThreshold = 0.03; // 更灵敏
-            if (Math.abs(dx) > Math.abs(dy)){
-                if (dx>moveThreshold) detectedAction="RIGHT";
-                else if (dx<-moveThreshold) detectedAction="LEFT";
+        let detectedAction="等待动作...";
+        const lm = results.landmarks[0];
+        function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
+        const thresholdFist=0.1;
+        if(dist(lm[4],wrist)<thresholdFist && dist(lm[8],wrist)<thresholdFist &&
+           dist(lm[12],wrist)<thresholdFist && dist(lm[16],wrist)<thresholdFist && dist(lm[20],wrist)<thresholdFist){
+            detectedAction="FIST";
+        } else if(lastX!==null && lastY!==null){
+            const dx=avgX-lastX, dy=avgY-lastY;
+            if(Math.abs(dx)>Math.abs(dy)){
+                if(dx>moveThreshold) detectedAction="RIGHT";
+                else if(dx<-moveThreshold) detectedAction="LEFT";
             } else {
-                if (dy>moveThreshold) detectedAction="DOWN";
-                else if (dy<-moveThreshold) detectedAction="UP";
+                if(dy>moveThreshold) detectedAction="DOWN";
+                else if(dy<-moveThreshold) detectedAction="UP";
             }
         }
 
-        lastX = avgX;
-        lastY = avgY;
+        lastX=avgX; lastY=avgY;
 
-        // 连续帧判定 + 冷却
-        if (detectedAction === currentAction) {
-            actionCounter++;
-        } else {
-            currentAction = detectedAction;
-            actionCounter = 1;
-        }
+        if(detectedAction===currentAction) actionCounter++;
+        else {currentAction=detectedAction; actionCounter=1;}
 
         const now = performance.now();
-        if (actionCounter >= 2 && detectedAction !== "等待动作..." && (now - lastSentTime > 150)) {
-            actionEl.textContent = detectedAction;
+        if(actionCounter>=framesNeeded && detectedAction!=="等待动作..." && now-lastSentTime>cooldown){
+            actionEl.textContent=detectedAction;
             await sendAction(detectedAction);
-            lastSentTime = now;
+            lastSentTime=now;
         } else {
-            actionEl.textContent = "等待动作...";
+            actionEl.textContent="等待动作...";
         }
 
     } else {
-        actionEl.textContent = "没有检测到手";
+        actionEl.textContent="没有检测到手";
     }
 
     requestAnimationFrame(loop);
