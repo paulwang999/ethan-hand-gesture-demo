@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>MediaPipe Hands → micro:bit Servo Control</title>
+<title>MediaPipe Hands + micro:bit（手势控制）</title>
 <style>
   body { text-align: center; font-family: sans-serif; margin: 10px; }
   video, canvas { width: 45%; margin: 5px; border: 1px solid #333; vertical-align: top; }
@@ -11,173 +11,233 @@
   .slider-container { margin: 5px 0; }
 </style>
 </head>
+
 <body>
 
-<h2>MediaPipe Hands → micro:bit (LEFT/RIGHT/UP/DOWN + RESET)</h2>
+<h2>MediaPipe Hands → micro:bit（食指控制 左/右/上/下，握拳＝归位）</h2>
 
-<div id="status">Initializing...</div>
-<div id="action">WAITING...</div>
+<div id="status">初始化...</div>
+<div id="action">等待动作...</div>
 
-<button id="connectBtn">Connect micro:bit</button>
+<button id="connectBtn">连接 micro:bit</button>
 <br>
 
 <video id="video" autoplay playsinline></video>
 <canvas id="canvas"></canvas>
 
+<!-- 灵敏度设置（可调） -->
 <div class="slider-container">
-    <label>Finger Direction Threshold: <span id="moveVal">0.05</span></label><br>
-    <input type="range" id="moveSlider" min="0.02" max="0.2" step="0.01" value="0.05">
+    <label>手指方向强度阈值 (dirThreshold): <span id="moveVal">0.05</span></label><br>
+    <input type="range" id="moveSlider" min="0.02" max="0.20" step="0.01" value="0.05">
 </div>
 <div class="slider-container">
-    <label>Frames Needed: <span id="frameVal">2</span></label><br>
+    <label>连续帧数 (framesNeeded): <span id="frameVal">2</span></label><br>
     <input type="range" id="frameSlider" min="1" max="5" step="1" value="2">
 </div>
 <div class="slider-container">
-    <label>Cooldown (ms): <span id="coolVal">150</span></label><br>
+    <label>冷却时间(ms): <span id="coolVal">150</span></label><br>
     <input type="range" id="coolSlider" min="50" max="500" step="10" value="150">
 </div>
 
 <script type="module">
 import { HandLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
 
-const statusEl = document.getElementById("status")
-const actionEl = document.getElementById("action")
-const video = document.getElementById("video")
-const canvas = document.getElementById("canvas")
-const ctx = canvas.getContext("2d")
-const connectBtn = document.getElementById("connectBtn")
+const statusEl   = document.getElementById("status");
+const actionEl   = document.getElementById("action");
+const video      = document.getElementById("video");
+const canvas     = document.getElementById("canvas");
+const ctx        = canvas.getContext("2d");
+const connectBtn = document.getElementById("connectBtn");
 
-let port, writer
-let dirThreshold = parseFloat(document.getElementById("moveSlider").value)
-let framesNeeded = parseInt(document.getElementById("frameSlider").value)
-let cooldown = parseInt(document.getElementById("coolSlider").value)
+// USB serial
+let port;
+let writer;
 
+// 参数：从滑块读取初始值
+let dirThreshold = parseFloat(document.getElementById("moveSlider").value);
+let framesNeeded = parseInt(document.getElementById("frameSlider").value);
+let cooldown     = parseInt(document.getElementById("coolSlider").value);
+
+// slider 更新
 document.getElementById("moveSlider").addEventListener("input", e=>{
-    dirThreshold = parseFloat(e.target.value)
-    document.getElementById("moveVal").textContent = dirThreshold.toFixed(2)
-})
+    dirThreshold = parseFloat(e.target.value);
+    document.getElementById("moveVal").textContent = dirThreshold.toFixed(2);
+});
 document.getElementById("frameSlider").addEventListener("input", e=>{
-    framesNeeded = parseInt(e.target.value)
-    document.getElementById("frameVal").textContent = framesNeeded
-})
+    framesNeeded = parseInt(e.target.value);
+    document.getElementById("frameVal").textContent = framesNeeded;
+});
 document.getElementById("coolSlider").addEventListener("input", e=>{
-    cooldown = parseInt(e.target.value)
-    document.getElementById("coolVal").textContent = cooldown
-})
+    cooldown = parseInt(e.target.value);
+    document.getElementById("coolVal").textContent = cooldown;
+});
 
+// 初始化显示
+document.getElementById("moveVal").textContent  = dirThreshold.toFixed(2);
+document.getElementById("frameVal").textContent = framesNeeded;
+document.getElementById("coolVal").textContent  = cooldown;
+
+// 连接 micro:bit（USB）
 connectBtn.addEventListener("click", async () => {
-    if (!("serial" in navigator)) {
-        statusEl.textContent = "Web Serial not supported"
-        return
-    }
     try {
-        port = await navigator.serial.requestPort()
-        await port.open({ baudRate: 115200 })
-        writer = port.writable.getWriter()
-        connectBtn.disabled = true
-        statusEl.textContent = "micro:bit connected"
+        if (!("serial" in navigator)) {
+            statusEl.textContent = "当前浏览器不支持 Web Serial，请使用桌面版 Chrome";
+            return;
+        }
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        writer = port.writable.getWriter();
+        connectBtn.disabled = true;
+        statusEl.textContent = "micro:bit 已连接（USB）";
     } catch (e) {
-        statusEl.textContent = "Connection failed: " + e
+        statusEl.textContent = "连接失败：" + e;
+        console.error(e);
     }
-})
+});
 
-let currentAction = null
-let actionCounter = 0
-let lastSent = 0
+// 去抖状态
+let currentAction = null;
+let actionCounter = 0;
+let lastSent = 0;
+let lastSentAction = null;
 
+// 串口发送给 micro:bit
 async function sendAction(a) {
-    if (!writer) return
-    let msg = "0"
-    if (["LEFT","RIGHT","UP","DOWN","RESET"].includes(a)) msg = a
-    await writer.write(new TextEncoder().encode(msg + "\n"))
+    if (!writer) return;
+    let msg = "0";
+    if (a==="LEFT")   msg = "L";
+    if (a==="RIGHT")  msg = "R";
+    if (a==="UP")     msg = "U";
+    if (a==="DOWN")   msg = "D";
+    if (a==="RESET")  msg = "F";
+    await writer.write(new TextEncoder().encode(msg + "\n"));
 }
 
-let handLandmarker
+// MediaPipe 初始化
+let handLandmarker;
 
 async function init() {
-    statusEl.textContent = "Loading model..."
+    statusEl.textContent = "加载模型...";
     const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-    )
-    handLandmarker = await HandLandmarker.createFromOptions(vision,{
-        baseOptions:{modelAssetPath:"./hand_landmarker.task"},
-        runningMode:"VIDEO",
-        numHands:1
-    })
-    statusEl.textContent = "Model loaded, starting camera..."
-    startCamera()
+    );
+
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: "./hand_landmarker.task" },
+        runningMode: "VIDEO",
+        numHands: 1,
+    });
+
+    statusEl.textContent = "模型加载完成，启动摄像头...";
+    startCamera();
 }
 
 function startCamera() {
-    navigator.mediaDevices.getUserMedia({video:true}).then(stream=>{
-        video.srcObject = stream
-        video.onloadedmetadata=()=>{
-            video.play()
-            statusEl.textContent="Camera started"
-            requestAnimationFrame(loop)
-        }
-    }).catch(err=>{
-        statusEl.textContent = "Cannot access camera: " + err
-    })
+    navigator.mediaDevices.getUserMedia({ video:true })
+        .then(stream=>{
+            video.srcObject = stream;
+            video.onloadedmetadata = ()=>{
+                video.play();
+                statusEl.textContent = "摄像头已启动";
+                requestAnimationFrame(loop);
+            };
+        })
+        .catch(err=>{
+            statusEl.textContent = "无法访问摄像头：" + err;
+            console.error(err);
+        });
 }
 
-function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z)}
+async function loop(timestamp) {
+    if (!handLandmarker) return;
 
-async function loop(timestamp){
-    if(!handLandmarker) return
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
-    const results = await handLandmarker.detectForVideo(video,timestamp)
-    ctx.clearRect(0,0,canvas.width,canvas.height)
-    ctx.drawImage(video,0,0,canvas.width,canvas.height)
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
 
-    if(results.landmarks && results.landmarks.length>0){
-        const lm = results.landmarks[0]
-        const draw = new DrawingUtils(ctx)
-        draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS)
-        draw.drawLandmarks(lm)
+    const results = await handLandmarker.detectForVideo(video, timestamp);
 
-        const wrist = lm[0]
-        const tip = lm[8]
-        const vx = tip.x - wrist.x
-        const vy = tip.y - wrist.y
-        const len = Math.hypot(vx,vy)
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
 
-        const dIndex = dist(lm[8],wrist)
-        const dMiddle = dist(lm[12],wrist)
-        const dRing = dist(lm[16],wrist)
-        const dPinky = dist(lm[20],wrist)
-        const fistThreshold = 0.12
-        const isFist = dIndex<fistThreshold && dMiddle<fistThreshold && dRing<fistThreshold && dPinky<fistThreshold
+    if (results.landmarks && results.landmarks.length > 0) {
+        const lm   = results.landmarks[0];
+        const draw = new DrawingUtils(ctx);
+        draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS);
+        draw.drawLandmarks(lm);
 
-        let detected = null
-        if(isFist){detected="RESET"}
-        else if(len>dirThreshold){
-            if(Math.abs(vx)>Math.abs(vy)){detected=vx>0?"LEFT":"RIGHT"} // 左右镜像
-            else{detected=vy>0?"DOWN":"UP"}
+        const wrist = lm[0];
+        const tip   = lm[8];
+
+        const vx = tip.x - wrist.x;
+        const vy = tip.y - wrist.y;
+        const len = Math.hypot(vx, vy);
+
+        function dist(a, b) {
+            return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
         }
 
-        if(detected && detected===currentAction) actionCounter++
-        else if(detected){currentAction=detected;actionCounter=1}
-        else{currentAction=null;actionCounter=0}
+        const dIndex  = dist(lm[8], wrist);
+        const dMiddle = dist(lm[12], wrist);
+        const dRing   = dist(lm[16], wrist);
+        const dPinky  = dist(lm[20], wrist);
 
-        const now = performance.now()
-        if(currentAction && actionCounter>=framesNeeded && now-lastSent>cooldown){
-            actionEl.textContent = currentAction
-            await sendAction(currentAction)
-            lastSent=now
-        }else if(!currentAction && now-lastSent>300){
-            actionEl.textContent="WAITING..."
+        const fistThreshold = 0.12;
+        const isFist =
+            dIndex  < fistThreshold &&
+            dMiddle < fistThreshold &&
+            dRing   < fistThreshold &&
+            dPinky  < fistThreshold;
+
+        let detected = null;
+
+        if (isFist) {
+            detected = "RESET";
+        } else if (len > dirThreshold) {
+            // 左右镜像修正
+            if (Math.abs(vx) > Math.abs(vy)) {
+                detected = vx > 0 ? "LEFT" : "RIGHT";
+            } else {
+                detected = vy > 0 ? "DOWN" : "UP";
+            }
         }
-    }else{
-        actionEl.textContent="NO HAND DETECTED"
-        currentAction=null
-        actionCounter=0
+
+        // 去抖 + 连续帧
+        if (detected && detected === currentAction) {
+            actionCounter++;
+        } else if (detected) {
+            currentAction = detected;
+            actionCounter = 1;
+        } else {
+            currentAction = null;
+            actionCounter = 0;
+        }
+
+        const now = performance.now();
+        if (
+            currentAction &&
+            currentAction !== lastSentAction &&
+            actionCounter >= framesNeeded &&
+            now - lastSent > cooldown
+        ) {
+            actionEl.textContent = currentAction;
+            await sendAction(currentAction);
+            lastSent = now;
+            lastSentAction = currentAction;
+        } else if (!currentAction && now - lastSent > 300) {
+            actionEl.textContent = "WAIT";
+            lastSentAction = null;
+        }
+
+    } else {
+        actionEl.textContent = "没有检测到手";
+        currentAction = null;
+        actionCounter = 0;
     }
-    requestAnimationFrame(loop)
+
+    requestAnimationFrame(loop);
 }
 
-window.addEventListener("load",init)
+window.addEventListener("load", init);
 </script>
 
 </body>
