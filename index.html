@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>MediaPipe Hands + micro:bit (Finger Control + Fist Reset)</title>
+<title>MediaPipe Hands → micro:bit Servo Control</title>
 <style>
   body { text-align: center; font-family: sans-serif; margin: 10px; }
   video, canvas { width: 45%; margin: 5px; border: 1px solid #333; vertical-align: top; }
@@ -11,10 +11,9 @@
   .slider-container { margin: 5px 0; }
 </style>
 </head>
-
 <body>
 
-<h2>MediaPipe Hands → micro:bit (Finger control LEFT/RIGHT/UP/DOWN, Fist = RESET)</h2>
+<h2>MediaPipe Hands → micro:bit (LEFT/RIGHT/UP/DOWN + RESET)</h2>
 
 <div id="status">Initializing...</div>
 <div id="action">WAITING...</div>
@@ -25,219 +24,160 @@
 <video id="video" autoplay playsinline></video>
 <canvas id="canvas"></canvas>
 
-<!-- Sensitivity settings -->
 <div class="slider-container">
-    <label>Finger Direction Threshold (dirThreshold): <span id="moveVal">0.05</span></label><br>
-    <input type="range" id="moveSlider" min="0.02" max="0.20" step="0.01" value="0.05">
+    <label>Finger Direction Threshold: <span id="moveVal">0.05</span></label><br>
+    <input type="range" id="moveSlider" min="0.02" max="0.2" step="0.01" value="0.05">
 </div>
 <div class="slider-container">
-    <label>Frames Needed (framesNeeded): <span id="frameVal">2</span></label><br>
+    <label>Frames Needed: <span id="frameVal">2</span></label><br>
     <input type="range" id="frameSlider" min="1" max="5" step="1" value="2">
 </div>
 <div class="slider-container">
-    <label>Cooldown Time (ms): <span id="coolVal">150</span></label><br>
+    <label>Cooldown (ms): <span id="coolVal">150</span></label><br>
     <input type="range" id="coolSlider" min="50" max="500" step="10" value="150">
 </div>
 
 <script type="module">
 import { HandLandmarker, FilesetResolver, DrawingUtils } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
 
-const statusEl   = document.getElementById("status");
-const actionEl   = document.getElementById("action");
-const video      = document.getElementById("video");
-const canvas     = document.getElementById("canvas");
-const ctx        = canvas.getContext("2d");
-const connectBtn = document.getElementById("connectBtn");
+const statusEl = document.getElementById("status")
+const actionEl = document.getElementById("action")
+const video = document.getElementById("video")
+const canvas = document.getElementById("canvas")
+const ctx = canvas.getContext("2d")
+const connectBtn = document.getElementById("connectBtn")
 
-// USB serial
-let port;
-let writer;
+let port, writer
+let dirThreshold = parseFloat(document.getElementById("moveSlider").value)
+let framesNeeded = parseInt(document.getElementById("frameSlider").value)
+let cooldown = parseInt(document.getElementById("coolSlider").value)
 
-// Parameters
-let dirThreshold = parseFloat(document.getElementById("moveSlider").value);
-let framesNeeded = parseInt(document.getElementById("frameSlider").value);
-let cooldown     = parseInt(document.getElementById("coolSlider").value);
-
-// Slider updates
 document.getElementById("moveSlider").addEventListener("input", e=>{
-    dirThreshold = parseFloat(e.target.value);
-    document.getElementById("moveVal").textContent = dirThreshold.toFixed(2);
-});
+    dirThreshold = parseFloat(e.target.value)
+    document.getElementById("moveVal").textContent = dirThreshold.toFixed(2)
+})
 document.getElementById("frameSlider").addEventListener("input", e=>{
-    framesNeeded = parseInt(e.target.value);
-    document.getElementById("frameVal").textContent = framesNeeded;
-});
+    framesNeeded = parseInt(e.target.value)
+    document.getElementById("frameVal").textContent = framesNeeded
+})
 document.getElementById("coolSlider").addEventListener("input", e=>{
-    cooldown = parseInt(e.target.value);
-    document.getElementById("coolVal").textContent = cooldown;
-});
+    cooldown = parseInt(e.target.value)
+    document.getElementById("coolVal").textContent = cooldown
+})
 
-// Initialize display
-document.getElementById("moveVal").textContent  = dirThreshold.toFixed(2);
-document.getElementById("frameVal").textContent = framesNeeded;
-document.getElementById("coolVal").textContent  = cooldown;
-
-// Connect micro:bit
 connectBtn.addEventListener("click", async () => {
-    try {
-        if (!("serial" in navigator)) {
-            statusEl.textContent = "Web Serial not supported, use desktop Chrome";
-            return;
-        }
-        port = await navigator.serial.requestPort();
-        await port.open({ baudRate: 115200 });
-        writer = port.writable.getWriter();
-        connectBtn.disabled = true;
-        statusEl.textContent = "micro:bit connected (USB)";
-    } catch (e) {
-        statusEl.textContent = "Connection failed: " + e;
-        console.error(e);
+    if (!("serial" in navigator)) {
+        statusEl.textContent = "Web Serial not supported"
+        return
     }
-});
+    try {
+        port = await navigator.serial.requestPort()
+        await port.open({ baudRate: 115200 })
+        writer = port.writable.getWriter()
+        connectBtn.disabled = true
+        statusEl.textContent = "micro:bit connected"
+    } catch (e) {
+        statusEl.textContent = "Connection failed: " + e
+    }
+})
 
-// Debounce
-let currentAction = null;
-let actionCounter = 0;
-let lastSent = 0;
+let currentAction = null
+let actionCounter = 0
+let lastSent = 0
 
-// Send action to micro:bit
 async function sendAction(a) {
-    if (!writer) return;
-
-    let msg = "0";
-    if (a==="LEFT")   msg = "L";
-    if (a==="RIGHT")  msg = "R";
-    if (a==="UP")     msg = "U";
-    if (a==="DOWN")   msg = "D";
-    if (a==="RESET")  msg = "F";
-
-    await writer.write(new TextEncoder().encode(msg + "\n"));
+    if (!writer) return
+    let msg = "0"
+    if (["LEFT","RIGHT","UP","DOWN","RESET"].includes(a)) msg = a
+    await writer.write(new TextEncoder().encode(msg + "\n"))
 }
 
-// MediaPipe initialization
-let handLandmarker;
+let handLandmarker
 
 async function init() {
-    statusEl.textContent = "Loading model...";
+    statusEl.textContent = "Loading model..."
     const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-    );
-
-    handLandmarker = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: "./hand_landmarker.task" },
-        runningMode: "VIDEO",
-        numHands: 1,
-    });
-
-    statusEl.textContent = "Model loaded, starting camera...";
-    startCamera();
+    )
+    handLandmarker = await HandLandmarker.createFromOptions(vision,{
+        baseOptions:{modelAssetPath:"./hand_landmarker.task"},
+        runningMode:"VIDEO",
+        numHands:1
+    })
+    statusEl.textContent = "Model loaded, starting camera..."
+    startCamera()
 }
 
 function startCamera() {
-    navigator.mediaDevices.getUserMedia({ video:true })
-        .then(stream=>{
-            video.srcObject = stream;
-            video.onloadedmetadata = ()=>{
-                video.play();
-                statusEl.textContent = "Camera started";
-                requestAnimationFrame(loop);
-            };
-        })
-        .catch(err=>{
-            statusEl.textContent = "Cannot access camera: " + err;
-            console.error(err);
-        });
+    navigator.mediaDevices.getUserMedia({video:true}).then(stream=>{
+        video.srcObject = stream
+        video.onloadedmetadata=()=>{
+            video.play()
+            statusEl.textContent="Camera started"
+            requestAnimationFrame(loop)
+        }
+    }).catch(err=>{
+        statusEl.textContent = "Cannot access camera: " + err
+    })
 }
 
-async function loop(timestamp) {
-    if (!handLandmarker) return;
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z)}
 
-    canvas.width  = video.videoWidth;
-    canvas.height = video.videoHeight;
+async function loop(timestamp){
+    if(!handLandmarker) return
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const results = await handLandmarker.detectForVideo(video,timestamp)
+    ctx.clearRect(0,0,canvas.width,canvas.height)
+    ctx.drawImage(video,0,0,canvas.width,canvas.height)
 
-    const results = await handLandmarker.detectForVideo(video, timestamp);
+    if(results.landmarks && results.landmarks.length>0){
+        const lm = results.landmarks[0]
+        const draw = new DrawingUtils(ctx)
+        draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS)
+        draw.drawLandmarks(lm)
 
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    ctx.drawImage(video,0,0,canvas.width,canvas.height);
+        const wrist = lm[0]
+        const tip = lm[8]
+        const vx = tip.x - wrist.x
+        const vy = tip.y - wrist.y
+        const len = Math.hypot(vx,vy)
 
-    if (results.landmarks && results.landmarks.length > 0) {
-        const lm   = results.landmarks[0];
-        const draw = new DrawingUtils(ctx);
-        draw.drawConnectors(lm, HandLandmarker.HAND_CONNECTIONS);
-        draw.drawLandmarks(lm);
+        const dIndex = dist(lm[8],wrist)
+        const dMiddle = dist(lm[12],wrist)
+        const dRing = dist(lm[16],wrist)
+        const dPinky = dist(lm[20],wrist)
+        const fistThreshold = 0.12
+        const isFist = dIndex<fistThreshold && dMiddle<fistThreshold && dRing<fistThreshold && dPinky<fistThreshold
 
-        const wrist = lm[0];   
-        const tip   = lm[8];   
-
-        const vx = tip.x - wrist.x;   
-        const vy = tip.y - wrist.y;   
-        const len = Math.hypot(vx, vy);
-
-        // Fist detection
-        function dist(a, b) {
-            return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+        let detected = null
+        if(isFist){detected="RESET"}
+        else if(len>dirThreshold){
+            if(Math.abs(vx)>Math.abs(vy)){detected=vx>0?"LEFT":"RIGHT"} // 左右镜像
+            else{detected=vy>0?"DOWN":"UP"}
         }
 
-        const dIndex  = dist(lm[8],  wrist);  
-        const dMiddle = dist(lm[12], wrist);  
-        const dRing   = dist(lm[16], wrist);  
-        const dPinky  = dist(lm[20], wrist);  
+        if(detected && detected===currentAction) actionCounter++
+        else if(detected){currentAction=detected;actionCounter=1}
+        else{currentAction=null;actionCounter=0}
 
-        const fistThreshold = 0.12;
-
-        const isFist =
-            dIndex  < fistThreshold &&
-            dMiddle < fistThreshold &&
-            dRing   < fistThreshold &&
-            dPinky  < fistThreshold;
-
-        let detected = null;
-
-        if (isFist) {
-            detected = "RESET";  // Fist
-        } else if (len > dirThreshold) {
-            if (Math.abs(vx) > Math.abs(vy)) {
-                detected = vx > 0 ? "LEFT" : "RIGHT";  // Left-right mirrored
-            } else {
-                detected = vy > 0 ? "DOWN" : "UP";
-            }
+        const now = performance.now()
+        if(currentAction && actionCounter>=framesNeeded && now-lastSent>cooldown){
+            actionEl.textContent = currentAction
+            await sendAction(currentAction)
+            lastSent=now
+        }else if(!currentAction && now-lastSent>300){
+            actionEl.textContent="WAITING..."
         }
-
-        // Debounce
-        if (detected && detected === currentAction) {
-            actionCounter++;
-        } else if (detected) {
-            currentAction = detected;
-            actionCounter = 1;
-        } else {
-            currentAction = null;
-            actionCounter = 0;
-        }
-
-        const now = performance.now();
-
-        if (
-            currentAction &&
-            actionCounter >= framesNeeded &&
-            now - lastSent > cooldown
-        ) {
-            actionEl.textContent = currentAction;  // Show English
-            await sendAction(currentAction);
-            lastSent = now;
-        } else if (!currentAction && now - lastSent > 300) {
-            actionEl.textContent = "WAITING...";
-        }
-
-    } else {
-        actionEl.textContent = "NO HAND DETECTED";
-        currentAction = null;
-        actionCounter = 0;
+    }else{
+        actionEl.textContent="NO HAND DETECTED"
+        currentAction=null
+        actionCounter=0
     }
-
-    requestAnimationFrame(loop);
+    requestAnimationFrame(loop)
 }
 
-window.addEventListener("load", init);
+window.addEventListener("load",init)
 </script>
 
 </body>
